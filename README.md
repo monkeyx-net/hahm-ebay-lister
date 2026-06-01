@@ -1,22 +1,25 @@
 # Listing Writer 🪄
 
-Turn item photos into ready-to-post eBay listings. Upload a few photos of one
-item, and Claude writes the title, description, item specifics, and a suggested
-price — the same way the original `ebay_lister` script does, but in a friendly
+Turn a whole pile of item photos into ready-to-post eBay listings. Upload
+**all** your photos at once — the app sorts them into separate items, then
+Claude writes a title, description, item specifics, and suggested price for
+each one. Same brains as the original `ebay_lister` script, but in a friendly
 web page you can open on your Mac **or your phone**.
 
-This is **Phase 1: The Listing Writer**. Phase 2 will add one-click posting
+This is **Phase 1 + the bulk flow**. Phase 2 will add one-click posting
 straight to eBay.
 
 ---
 
 ## What you get
 
-- 📸 Drag-and-drop (or tap-to-add) photo upload
-- 🤖 Claude writes a full eBay listing from the photos
-- ✍️ Editable title (with the 80-character limit shown) and description
-- 📋 One-tap copy for the title and description
-- ⬇️ Download the whole listing as a file
+- 📸 Upload your whole batch of photos at once (drag-and-drop or tap-to-add)
+- 🔀 Automatic sorting of photos into separate items (group → verify → merge)
+- 🧹 A review screen to rename items, move a photo to the right item, or flag
+  stragglers
+- 🤖 Bulk listing — Claude writes a full eBay listing for every item
+- ✍️ Editable titles (with the 80-character limit shown) and descriptions
+- 📋 One-tap copy, plus ⬇️ download everything as JSON or a CSV spreadsheet
 - 🔒 Your API key stays on the server — never exposed to the browser
 
 ---
@@ -96,7 +99,10 @@ done — no Terminal ever again.
 
 ## Roadmap
 
-- **Phase 2 — eBay publishing.** Connect your eBay account and post listings
-  with one click (requires a one-time setting in your eBay developer account).
-- **Phase 3 — multi-item sorting.** Upload a pile of photos and have them
-  grouped into separate listings automatically (like the script's `--intake`).
+- ✅ **Multi-item sorting.** Upload a pile of photos; they're grouped into
+  separate listings automatically (like the script's `--intake`).
+- ✅ **Bulk listing.** Write a listing for every sorted item in one go, with a
+  review/edit screen and JSON/CSV export.
+- **Phase 2 — eBay publishing.** Connect your eBay account and post all the
+  listings with one click (requires a one-time setting in your eBay developer
+  account).
