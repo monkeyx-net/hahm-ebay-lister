@@ -208,3 +208,74 @@ export function buildProfiledAnalysisPrompt(profile: string): string {
   const addon = PROFILE_PROMPT_ADDONS[normalized] ?? "";
   return ANALYSIS_PROMPT + addon;
 }
+
+// ── Sorting prompts (ported from sort_photos in the Python script) ──────────
+
+export function buildSortPrompt(
+  nPhotos: number,
+  labelStart: number,
+  labelEnd: number,
+  contextNote: string
+): string {
+  return `You are helping organize resale item photos into separate eBay listings.
+
+I will show you ${nPhotos} photos, numbered ${labelStart} through ${labelEnd}.${contextNote}
+
+Your job: group these numbered photos by physical item. Each group = one eBay listing.
+
+Rules:
+- Photos of the SAME item go in the same group (front view, back view, tag photo, close-up = same item)
+- Each distinct physical item = its own separate group
+- Every numbered photo must go in exactly one group
+- Use short descriptive folder names: brand + color + item type, all lowercase, hyphens only
+  Examples: "nike-black-dri-fit-top", "coach-tan-leather-tote", "levis-501-blue-jeans"
+
+Return ONLY valid JSON:
+{
+  "groups": [
+    {"folder_name": "brand-color-item-type", "photo_indices": [${labelStart}, ${labelStart + 1}]},
+    {"folder_name": "brand-color-item-type", "photo_indices": [${labelEnd}]}
+  ]
+}
+
+No markdown. No explanation. JSON only.`;
+}
+
+export function buildVerifyGroupPrompt(n: number): string {
+  return `Look carefully at these ${n} photos. They have been proposed as a single eBay listing.
+
+Do ALL of these photos show the SAME physical item?
+- Front/back/side/tag/close-up shots of ONE item → all the same item → valid
+- A completely different item mixed in by mistake → invalid
+
+If all photos are the SAME item:
+{"valid": true}
+
+If photos of DIFFERENT items are mixed together:
+{"valid": false, "keep_indices": [1-based indices of the photos belonging to the MAIN/majority item], "reason": "one sentence explanation"}
+
+Return ONLY valid JSON. No markdown. No explanation.`;
+}
+
+export function buildVerifyMergePrompt(nA: number, nB: number): string {
+  return `I have two groups of photos that were sorted as separate eBay listings.
+
+Group A: ${nA} photo(s) shown first.
+Group B: ${nB} photo(s) shown after.
+
+Look carefully at ALL photos. Are ALL of them actually the SAME physical item that was accidentally split into two groups? (For example: front view in Group A, back view and tag in Group B.)
+
+Same item — should be ONE listing:
+{"merge": true}
+
+Different items — keep as separate listings:
+{"merge": false}
+
+Return ONLY valid JSON. No markdown. No explanation.`;
+}
+
+export function slugifyFolderName(raw: string): string {
+  const lowered = String(raw || "item").toLowerCase().trim();
+  const cleaned = lowered.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
+  return cleaned.replace(/^-+|-+$/g, "") || "item";
+}

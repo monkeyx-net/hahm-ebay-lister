@@ -33,3 +33,30 @@ export interface AnalyzeResponse {
   listing?: ListingResult;
   error?: string;
 }
+
+export interface SortResponse {
+  ok: boolean;
+  groups?: { name: string; photoIndices: number[] }[];
+  orphanIndices?: number[];
+  error?: string;
+}
+
+// ── Client-side working model for the bulk flow ──────────────────────────────
+
+export interface Photo {
+  id: string;
+  previewUrl: string;
+  mediaType: string;
+  data: string; // base64, no prefix
+}
+
+export type ItemStatus = "idle" | "writing" | "done" | "error";
+
+export interface ItemGroup {
+  id: string;
+  name: string;
+  photoIds: string[];
+  listing?: ListingResult;
+  status: ItemStatus;
+  error?: string;
+}

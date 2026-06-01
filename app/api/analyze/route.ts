@@ -6,6 +6,7 @@ import {
   buildProfiledAnalysisPrompt,
   normalizeItemProfile,
 } from "@/lib/prompts";
+import { toImageBlock, type ImageBlock } from "@/lib/images";
 import type { AnalyzeRequestBody, ListingResult } from "@/lib/types";
 
 // Analysis can take 20-40s for a multi-photo item. Give it room.
@@ -14,41 +15,15 @@ export const maxDuration = 60;
 const ANALYSIS_MODEL = "claude-sonnet-4-6";
 const ROUTER_MODEL = "claude-haiku-4-5-20251001";
 const MAX_IMAGES = 12;
-const ALLOWED_MEDIA = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 
-type ImageBlock = Anthropic.ImageBlockParam;
-
-// Anthropic rejects any single image over 5 MB. Browser resizing keeps photos
-// far under this, but guard anyway so a stray large image is skipped cleanly.
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
-function toImageBlocks(
-  images: AnalyzeRequestBody["images"]
-): ImageBlock[] {
+function toImageBlocks(images: AnalyzeRequestBody["images"]): ImageBlock[] {
   const blocks: ImageBlock[] = [];
   for (const img of images.slice(0, MAX_IMAGES)) {
-    if (!img?.data || !ALLOWED_MEDIA.has(img.mediaType)) continue;
-    // Accept either a raw base64 string or a full data URL.
-    const data = img.data.includes(",") ? img.data.split(",")[1] : img.data;
-    // base64 inflates ~4/3; estimate the decoded size and skip if too large.
-    if (data.length * 0.75 > MAX_IMAGE_BYTES) continue;
-    blocks.push({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: img.mediaType as ImageBlockParam_MediaType,
-        data,
-      },
-    });
+    const block = toImageBlock(img);
+    if (block) blocks.push(block);
   }
   return blocks;
 }
-
-type ImageBlockParam_MediaType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
 
 // Mirrors route_item_profile(): honor a forced profile, else ask the model.
 async function routeProfile(
