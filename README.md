@@ -1,108 +1,129 @@
 # Listing Writer 🪄
 
-Turn a whole pile of item photos into ready-to-post eBay listings. Upload
-**all** your photos at once — the app sorts them into separate items, then
-Claude writes a title, description, item specifics, and suggested price for
-each one. Same brains as the original `ebay_lister` script, but in a friendly
-web page you can open on your Mac **or your phone**.
+A free, open-source web app for resellers. **Dump in a pile of item photos →
+it sorts them into separate items → writes a full eBay listing for each →
+posts them to eBay.** Runs as your own private website on Vercel; works on your
+computer and your phone.
 
-This is **Phase 1 + the bulk flow**. Phase 2 will add one-click posting
-straight to eBay.
-
----
-
-## What you get
-
-- 📸 Upload your whole batch of photos at once (drag-and-drop or tap-to-add)
-- 🔀 Automatic sorting of photos into separate items (group → verify → merge)
-- 🧹 A review screen to rename items, move a photo to the right item, or flag
-  stragglers
-- 🤖 Bulk listing — Claude writes a full eBay listing for every item
-- ✍️ Editable titles (with the 80-character limit shown) and descriptions
-- 📋 One-tap copy, plus ⬇️ download everything as JSON or a CSV spreadsheet
-- 🔒 Your API key stays on the server — never exposed to the browser
+It's **bring-your-own-keys**: you plug in your own Anthropic (AI) key and your
+own eBay developer keys, so you're in full control and there's no middleman.
 
 ---
 
-## Run it on your own computer (optional)
+## What it does
 
-You only need this if you want to test changes locally. To just *use* it, skip
-to **Deploy to the web** below.
-
-1. Install [Node.js](https://nodejs.org/) (the "LTS" version).
-2. In a terminal, from this folder:
-   ```bash
-   npm install
-   ```
-3. Make a file called `.env.local` with your Anthropic key:
-   ```bash
-   echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" > .env.local
-   ```
-4. Start it:
-   ```bash
-   npm run dev
-   ```
-5. Open <http://localhost:3000>.
-
-> Get an Anthropic API key at <https://console.anthropic.com/>.
+- 📸 Upload a whole batch of photos at once
+- 🔀 Auto-sorts them into separate items (group → verify → un-split)
+- 🏷️ Assigns bin/SKU codes so you can find items later (e.g. `K42-A`, `K42-B`)
+- 🤖 Writes a title, description, item specifics, condition, and suggested price
+- ✍️ Everything is editable before you post
+- 🚀 Posts straight to eBay — one item or the whole batch
+- 📋 Or export everything as CSV / JSON
+- 🔒 Your keys live in environment variables, never in the code
 
 ---
 
-## Deploy to the web (so you can bookmark it — no Terminal)
+## What you'll need (all free to start)
 
-This puts the app online at a private URL you can open from any device. It's
-free for personal use.
+1. **An Anthropic API key** — the AI that writes listings. Get one at
+   <https://console.anthropic.com/> (you pay Anthropic per use; pennies per item).
+2. **An eBay developer keyset** — to post listings. Free at
+   <https://developer.ebay.com/>. You'll need the **App ID**, **Cert ID**, and a
+   **RuName** (explained below). *Only needed for posting — sorting and writing
+   work without it.*
+3. **A Vercel account** — free hosting. <https://vercel.com/>
+4. **Node.js** installed on your computer — <https://nodejs.org/> (the "LTS" version).
 
-### Step 1 — Put the code on GitHub
+---
 
-1. Create a free account at <https://github.com> if you don't have one.
-2. Make a **new repository** (call it `ebay-lister-web`). Keep it **Private**.
-3. Upload this folder to it. The easiest no-Terminal way:
-   - On the new repo page, click **uploading an existing file**.
-   - Drag in **everything except** the `node_modules` folder and `.env.local`
-     (those are excluded automatically by `.gitignore` if you use git, but if
-     you're dragging files manually, just don't include them).
+## Setup, step by step
 
-   *(If you're comfortable with Terminal: `git init`, `git add .`,
-   `git commit -m "Listing Writer"`, then push to your new repo.)*
+### 1. Get the code
+```bash
+git clone https://github.com/YOUR-USERNAME/ebay-lister-web.git
+cd ebay-lister-web
+npm install
+```
 
-### Step 2 — Connect to Vercel
+### 2. Try it locally (optional)
+Create a file called `.env.local` (copy from `.env.example`) and add at least
+your Anthropic key:
+```bash
+cp .env.example .env.local
+# then edit .env.local and set ANTHROPIC_API_KEY=sk-ant-...
+npm run dev
+```
+Open <http://localhost:3000>. You can sort and write listings right away.
+(eBay posting needs the eBay setup below + a deployed URL.)
 
-1. Create a free account at <https://vercel.com> and sign in **with GitHub**.
-2. Click **Add New… → Project**.
-3. Pick your `ebay-lister-web` repository and click **Import**.
-4. Before clicking Deploy, open **Environment Variables** and add:
-   - **Name:** `ANTHROPIC_API_KEY`
-   - **Value:** your Anthropic key (`sk-ant-...`)
-5. Click **Deploy** and wait about a minute.
+### 3. Deploy to Vercel
+The easiest path:
+```bash
+npm i -g vercel     # one time
+vercel login        # one time
+vercel --prod       # deploys; gives you a URL like https://your-app.vercel.app
+```
+Then add your environment variables in the Vercel dashboard
+(**Project → Settings → Environment Variables**) — see the full list below —
+and redeploy with `vercel --prod`.
 
-### Step 3 — Use it
+> Prefer no terminal? You can also push this repo to GitHub and import it at
+> vercel.com → "Add New Project", then add the env vars there.
 
-Vercel gives you a URL like `https://ebay-lister-web.vercel.app`. Open it,
-**bookmark it on your Mac and add it to your phone's home screen**, and you're
-done — no Terminal ever again.
+### 4. Set up eBay posting (optional, for the "Post to eBay" button)
+1. At <https://developer.ebay.com/> create a **Production keyset**. Note the
+   **App ID (Client ID)** and **Cert ID (Client Secret)**.
+2. Under that keyset → **User Tokens** → **Add eBay Redirect URL (RuName)**.
+   Set, using your deployed URL:
+   - **Auth accepted URL:** `https://your-app.vercel.app/api/ebay/callback`
+   - **Auth declined URL:** `https://your-app.vercel.app/?ebay=declined`
+   - **Privacy policy URL:** `https://your-app.vercel.app/privacy`
+   - Choose **OAuth** (not Auth'n'Auth).
+3. Copy the generated **RuName**.
+4. Put all the values into Vercel's env vars (below) and redeploy.
+5. On the live site, click **Connect eBay**, approve on eBay, and paste the URL
+   from eBay's confirmation page back into the app. Done (lasts ~18 months).
+
+---
+
+## Environment variables
+
+| Variable | Required | What it is |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key (writes the listings) |
+| `EBAY_CLIENT_ID` | for posting | eBay App ID |
+| `EBAY_CLIENT_SECRET` | for posting | eBay Cert ID |
+| `EBAY_RU_NAME` | for posting | Your eBay RuName |
+| `SESSION_SECRET` | for posting | Random string to encrypt your eBay token. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `APP_URL` | for posting | Your deployed URL, e.g. `https://your-app.vercel.app` |
+| `EBAY_LOCATION_POSTAL_CODE` | optional | Your ZIP (only used once to create an eBay inventory location) |
+
+**Never commit real keys.** `.env.local` is gitignored; production keys live in
+Vercel only.
 
 ---
 
 ## How it works (for the curious)
 
-- **Frontend** (`app/page.tsx`, `app/ResultCard.tsx`): the upload UI. Photos are
-  shrunk to ~1024px in your browser before upload, so they're small and fast.
-- **API** (`app/api/analyze/route.ts`): runs on Vercel's servers. It holds your
-  Anthropic key, picks the right item "profile", and asks Claude to write the
-  listing. The prompts in `lib/prompts.ts` are ported directly from your
-  original Python script.
-- **Nothing is stored.** Photos are used to write the listing and then
-  discarded.
+- **Frontend** (`app/`): the upload → sort → review → write → post wizard.
+  Photos are shrunk in your browser before upload.
+- **`/api/sort`**: groups photos into items (AI), with verify + un-split passes.
+- **`/api/analyze`**: writes a listing for one item from its photos.
+- **`/api/ebay/*`**: OAuth connect (encrypted-cookie token) + the
+  inventory→offer→publish flow, with recovery for eBay's category/aspect quirks.
+- **Stack**: Next.js (App Router) + TypeScript, deployed on Vercel. Nothing is
+  stored server-side; photos are used to build listings and discarded.
 
 ---
 
-## Roadmap
+## Costs
 
-- ✅ **Multi-item sorting.** Upload a pile of photos; they're grouped into
-  separate listings automatically (like the script's `--intake`).
-- ✅ **Bulk listing.** Write a listing for every sorted item in one go, with a
-  review/edit screen and JSON/CSV export.
-- **Phase 2 — eBay publishing.** Connect your eBay account and post all the
-  listings with one click (requires a one-time setting in your eBay developer
-  account).
+- **Anthropic**: a few cents per item (sorting + writing). You set your own key.
+- **eBay**: normal eBay selling fees apply to listings you post.
+- **Vercel**: free Hobby tier is plenty for personal use.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). Use it, fork it, share it.

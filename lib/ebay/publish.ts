@@ -336,10 +336,17 @@ async function fetchOrCreateLocation(accessToken: string): Promise<string> {
   }
   const key = "HOME_OFFICE";
   const payload = {
-    name: "Home HQ",
+    name: "Home Office",
     merchantLocationStatus: "ENABLED",
     locationTypes: ["WAREHOUSE"],
-    location: { address: { postalCode: "84095", country: "US" } },
+    location: {
+      address: {
+        // Set EBAY_LOCATION_POSTAL_CODE to your own ZIP. Only used the first
+        // time, to create an inventory location if you don't already have one.
+        postalCode: process.env.EBAY_LOCATION_POSTAL_CODE || "10001",
+        country: "US",
+      },
+    },
   };
   await ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/location/${key}`, {
     body: payload,
