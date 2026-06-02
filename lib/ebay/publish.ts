@@ -89,6 +89,9 @@ async function ebayRequest(
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
       Accept: "application/json",
+      // Node's fetch defaults Accept-Language to "*", which eBay rejects
+      // (error 25709). Pin it to a valid locale.
+      "Accept-Language": "en-US",
       ...(opts.extraHeaders || {}),
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
