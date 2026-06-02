@@ -49,6 +49,7 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const [sorting, setSorting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ebayConnected, setEbayConnected] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const photoMap = useMemo(() => {
@@ -63,6 +64,19 @@ export default function Home() {
   useEffect(() => {
     groupsRef.current = groups;
   }, [groups]);
+
+  // Keep eBay connection status in sync (also after the connect bar updates).
+  useEffect(() => {
+    const check = () =>
+      fetch("/api/ebay/status", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => setEbayConnected(Boolean(d.connected)))
+        .catch(() => setEbayConnected(false));
+    check();
+    const onFocus = () => check();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   // ── Upload ──────────────────────────────────────────────
   const addFiles = useCallback(async (fileList: FileList | null) => {
@@ -252,6 +266,61 @@ export default function Home() {
       )
     );
 
+  const postGroup = useCallback(
+    async (groupId: string) => {
+      const group = groupsRef.current.find((g) => g.id === groupId);
+      if (!group || !group.listing) return;
+      const images = group.photoIds
+        .map((id) => photoMap.get(id))
+        .filter((p): p is Photo => Boolean(p))
+        .map((p) => ({ mediaType: p.mediaType, data: p.data }));
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === groupId ? { ...g, postStatus: "posting", postError: undefined } : g
+        )
+      );
+      try {
+        const res = await fetch("/api/ebay/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sku: group.sku, listing: group.listing, images }),
+        });
+        const data = (await res.json()) as {
+          success: boolean;
+          listingId?: string;
+          error?: string;
+        };
+        if (!data.success) throw new Error(data.error || "eBay rejected the listing.");
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.id === groupId
+              ? { ...g, postStatus: "posted", listingId: data.listingId }
+              : g
+          )
+        );
+      } catch (e) {
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.id === groupId
+              ? { ...g, postStatus: "error", postError: (e as Error).message }
+              : g
+          )
+        );
+      }
+    },
+    [photoMap]
+  );
+
+  const postAll = async () => {
+    const ready = groups
+      .filter((g) => g.status === "done" && g.postStatus !== "posted")
+      .map((g) => g.id);
+    // Sequential — keeps eBay calls gentle and errors easy to read.
+    for (const id of ready) {
+      await postGroup(id);
+    }
+  };
+
   const usableGroups = useMemo(
     () => groups.filter((g) => g.photoIds.length > 0),
     [groups]
@@ -420,8 +489,11 @@ export default function Home() {
         <ListingsView
           groups={usableGroups}
           photoById={photoById}
+          ebayConnected={ebayConnected}
           onEdit={editListing}
           onRetry={writeGroup}
+          onPost={postGroup}
+          onPostAll={postAll}
           onBack={() => setStep("review")}
         />
       )}

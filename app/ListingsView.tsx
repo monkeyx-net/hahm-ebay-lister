@@ -11,21 +11,32 @@ import type { ItemGroup, ListingResult, Photo } from "@/lib/types";
 interface ListingsViewProps {
   groups: ItemGroup[];
   photoById: (id: string) => Photo | undefined;
+  ebayConnected: boolean;
   onEdit: (groupId: string, patch: Partial<ListingResult>) => void;
   onRetry: (groupId: string) => void;
+  onPost: (groupId: string) => void;
+  onPostAll: () => void;
   onBack: () => void;
 }
 
 export function ListingsView({
   groups,
   photoById,
+  ebayConnected,
   onEdit,
   onRetry,
+  onPost,
+  onPostAll,
   onBack,
 }: ListingsViewProps) {
   const done = groups.filter((g) => g.status === "done").length;
   const writing = groups.filter((g) => g.status === "writing").length;
   const failed = groups.filter((g) => g.status === "error").length;
+  const posted = groups.filter((g) => g.postStatus === "posted").length;
+  const posting = groups.some((g) => g.postStatus === "posting");
+  const readyToPost = groups.filter(
+    (g) => g.status === "done" && g.postStatus !== "posted"
+  ).length;
   const allDone = writing === 0 && done > 0;
 
   return (
@@ -36,8 +47,33 @@ export function ListingsView({
           {done}/{groups.length} ready
           {writing > 0 ? ` · ${writing} writing` : ""}
           {failed > 0 ? ` · ${failed} failed` : ""}
+          {posted > 0 ? ` · ${posted} posted` : ""}
         </span>
       </div>
+
+      {ebayConnected && readyToPost > 0 && (
+        <div className="post-all-bar">
+          <span>
+            {posted > 0
+              ? `${posted} posted · ${readyToPost} left`
+              : "Connected to eBay — post a single item to test first, or post them all."}
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onPostAll}
+            disabled={posting}
+          >
+            {posting ? (
+              <>
+                <span className="spinner" aria-hidden="true" /> Posting…
+              </>
+            ) : (
+              `🚀 Post all ${readyToPost} to eBay`
+            )}
+          </button>
+        </div>
+      )}
 
       <div className="listing-list">
         {groups.map((group) => (
@@ -45,8 +81,10 @@ export function ListingsView({
             key={group.id}
             group={group}
             photoById={photoById}
+            ebayConnected={ebayConnected}
             onEdit={onEdit}
             onRetry={onRetry}
+            onPost={onPost}
           />
         ))}
       </div>

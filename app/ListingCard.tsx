@@ -54,15 +54,19 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 interface ListingCardProps {
   group: ItemGroup;
   photoById: (id: string) => Photo | undefined;
+  ebayConnected: boolean;
   onEdit: (groupId: string, patch: Partial<ListingResult>) => void;
   onRetry: (groupId: string) => void;
+  onPost: (groupId: string) => void;
 }
 
 export function ListingCard({
   group,
   photoById,
+  ebayConnected,
   onEdit,
   onRetry,
+  onPost,
 }: ListingCardProps) {
   const [open, setOpen] = useState(true);
   const listing = group.listing;
@@ -226,6 +230,48 @@ export function ListingCard({
                 ))}
               </div>
             </details>
+          )}
+
+          {/* eBay posting */}
+          {group.postStatus === "posted" ? (
+            <p className="post-result ok">
+              ✅ Posted to eBay
+              {group.listingId ? (
+                <>
+                  {" "}
+                  ·{" "}
+                  <a
+                    href={`https://www.ebay.com/itm/${group.listingId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    View listing ↗
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : ebayConnected ? (
+            <div className="post-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => onPost(group.id)}
+                disabled={group.postStatus === "posting"}
+              >
+                {group.postStatus === "posting" ? (
+                  <>
+                    <span className="spinner" aria-hidden="true" /> Posting to eBay…
+                  </>
+                ) : (
+                  "🚀 Post this to eBay"
+                )}
+              </button>
+              {group.postStatus === "error" && group.postError && (
+                <p className="post-result err">⚠️ {group.postError}</p>
+              )}
+            </div>
+          ) : (
+            <p className="post-hint">Connect eBay (top of page) to post this listing.</p>
           )}
         </div>
       )}

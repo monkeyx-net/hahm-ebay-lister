@@ -52,6 +52,8 @@ export interface Photo {
 
 export type ItemStatus = "idle" | "writing" | "done" | "error";
 
+export type PostStatus = "idle" | "posting" | "posted" | "error";
+
 export interface ItemGroup {
   id: string;
   sku: string; // bin reference, e.g. "K75-A"
@@ -60,4 +62,8 @@ export interface ItemGroup {
   listing?: ListingResult;
   status: ItemStatus;
   error?: string;
+  // eBay posting state (Phase 2)
+  postStatus?: PostStatus;
+  listingId?: string;
+  postError?: string;
 }
