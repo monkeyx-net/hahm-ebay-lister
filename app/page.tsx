@@ -18,7 +18,7 @@ import type {
 } from "@/lib/types";
 
 type Step = "upload" | "review" | "listings";
-// Keep a whole batch's sort payload comfortably under Vercel's 4.5 MB request
+// Keep a whole batch's sort payload comfortably under the server's request-body
 // limit (sort sends small thumbnails for every photo at once).
 const MAX_PHOTOS = 100;
 const WRITE_CONCURRENCY = 3;

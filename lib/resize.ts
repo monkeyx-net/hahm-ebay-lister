@@ -4,8 +4,8 @@
 //   • data      — ~1024px, used for writing the listing (needs detail: tags, etc.)
 //   • previewUrl — ~400px thumbnail, used for on-screen display AND for the
 //                  sort step (which only needs to tell items apart). Keeping the
-//                  sort payload tiny avoids Vercel's 4.5 MB request-body limit
-//                  when a whole batch is sent at once.
+//                  sort payload tiny keeps a whole-batch upload well under the
+//                  server's request-body limit (bodySizeLimit in next.config.mjs).
 
 const FULL_DIM = 1024;
 const FULL_QUALITY = 0.82;

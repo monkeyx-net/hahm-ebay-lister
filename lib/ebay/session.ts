@@ -19,7 +19,7 @@ interface Connection {
 async function aesKey(): Promise<CryptoKey> {
   const secret = process.env.SESSION_SECRET;
   if (!secret) {
-    throw new Error("SESSION_SECRET is not set. Add it in Vercel env vars.");
+    throw new Error("SESSION_SECRET is not set. Add it to your environment variables.");
   }
   if (secret.length < 32) {
     // A short human-chosen passphrase would make the cookie encryption

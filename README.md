@@ -2,8 +2,8 @@
 
 A free, open-source web app for resellers. **Dump in a pile of item photos →
 it sorts them into separate items → writes a full eBay listing for each →
-posts them to eBay.** Runs as your own private website on Vercel; works on your
-computer and your phone.
+posts them to eBay.** Runs as your own private website, self-hosted with Docker
+(e.g. on [Coolify](https://coolify.io)); works on your computer and your phone.
 
 It's **bring-your-own-keys**: you plug in your own Anthropic (AI) key and your
 own eBay developer keys, so you're in full control and there's no middleman.
@@ -31,95 +31,84 @@ own eBay developer keys, so you're in full control and there's no middleman.
    <https://developer.ebay.com/>. You'll need the **App ID**, **Cert ID**, and a
    **RuName** (explained below). *Only needed for posting — sorting and writing
    work without it.*
-3. **A Vercel account** — free hosting. <https://vercel.com/>
-4. **Node.js** installed on your computer — <https://nodejs.org/> (the "LTS" version).
-
-> There are two ways to set this up. **Not a coder? Use the Quick Start.**
-> Comfortable in a terminal? Skip to *Setup for developers*.
+3. **Somewhere to run it** — a server with [Docker](https://docs.docker.com/get-docker/).
+   The easiest path is a self-hosted PaaS like [Coolify](https://coolify.io) on a
+   cheap VPS, which gives you a deploy-from-GitHub workflow and automatic HTTPS.
+4. **Node.js** if you want to run it locally for development —
+   <https://nodejs.org/> (the "LTS" version).
 
 ---
 
-## 🚀 Quick Start (no coding required)
+## 🚀 Quick Start with Coolify (recommended)
 
-You can get your own copy running without ever opening a terminal.
+[Coolify](https://coolify.io) is a free, open-source, self-hosted platform —
+think "your own Vercel/Heroku" on a server you control. Install it on any VPS
+(it has a one-line installer), then:
 
-**1. Make your free accounts and grab your keys.**
-   - Anthropic key at <https://console.anthropic.com/> → "API Keys" → create one (starts with `sk-ant-`).
-   - eBay developer keyset at <https://developer.ebay.com/> (do this part later if you only want to write listings, not post them).
-   - A Vercel account at <https://vercel.com/> — sign up **with GitHub** (it'll make a free GitHub account too if you don't have one).
-
-**2. Deploy your own copy in a few clicks.**
-   Click the button (it copies this project to your own GitHub and deploys it on Vercel):
-
-   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/ashnicholes-droid/hahm-ebay-lister)
-
-   When Vercel asks for **Environment Variables**, set **both** of these:
+1. **Add this repository** as a new resource → *Public/Private Git Repository*.
+2. **Set the Build Pack to `Dockerfile`** — the included `Dockerfile` builds a
+   self-contained Next.js image, and the built-in `/api/health` endpoint lets
+   Coolify monitor the container.
+3. **Add the environment variables** (see the table below) in
+   **Coolify → your resource → Environment Variables**. At minimum set:
    - `ANTHROPIC_API_KEY` — your Anthropic key (starts with `sk-ant-`).
-   - `APP_SECRET` — any access code you make up (a memorable phrase works). A
-     deployed app **won't run without this**: it stops strangers from spending
-     your Anthropic credits, and every AI action returns an error until it's set.
+   - `APP_SECRET` — any access code you make up. A deployed app **won't run
+     without this**: it stops strangers from spending your Anthropic credits,
+     and every AI action returns an error until it's set.
+   - (Add the eBay variables later, when you're ready to post.)
+4. **Set a domain** and let Coolify provision HTTPS, then **Deploy**. Set
+   `APP_URL` to that public domain.
 
-   (You can add the eBay variables later.) Click **Deploy** and wait about a
-   minute — you'll get a web address like `https://your-app.vercel.app`.
+Bookmark your app on your computer and add it to your phone's home screen. You
+can start sorting and writing listings immediately.
 
-**3. Bookmark your app** on your computer and add it to your phone's home
-   screen. You can start sorting and writing listings immediately.
-
-**4. To enable posting to eBay** (optional), follow *Set up eBay posting* below
-   using your new web address, then add the eBay values in
-   **Vercel → your project → Settings → Environment Variables** and redeploy.
-
-That's it — no terminal, no code editing. Everything else below is for people
-who want to run it locally or tinker.
+> Prefer a different host? Anything that runs a Docker image works — CapRover,
+> Dokku, Railway, Fly.io, or a plain `docker compose up` on a VPS behind a
+> reverse proxy. There are no platform-specific dependencies.
 
 ---
 
-## Setup for developers (command line)
+## Run locally with Docker
 
-### 1. Get the code
 ```bash
-git clone https://github.com/ashnicholes-droid/hahm-ebay-lister.git
+git clone https://github.com/monkeyx-net/hahm-ebay-lister.git
+cd hahm-ebay-lister
+cp .env.example .env.local        # then edit and set ANTHROPIC_API_KEY=sk-ant-...
+./deploy.sh                       # builds the image and starts it on :3000
+```
+
+`./deploy.sh` wraps `docker compose build` + `docker compose up -d`. Open
+<http://localhost:3000>. To view logs: `docker compose logs -f`. To stop:
+`docker compose down`.
+
+## Run locally for development (no Docker)
+
+```bash
+git clone https://github.com/monkeyx-net/hahm-ebay-lister.git
 cd hahm-ebay-lister
 npm install
-```
-
-### 2. Try it locally (optional)
-Create a file called `.env.local` (copy from `.env.example`) and add at least
-your Anthropic key:
-```bash
-cp .env.example .env.local
-# then edit .env.local and set ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env.local        # then edit and set ANTHROPIC_API_KEY=sk-ant-...
 npm run dev
 ```
+
 Open <http://localhost:3000>. You can sort and write listings right away.
 (eBay posting needs the eBay setup below + a deployed URL.)
 
-### 3. Deploy to Vercel
-The easiest path:
-```bash
-npm i -g vercel     # one time
-vercel login        # one time
-vercel --prod       # deploys; gives you a URL like https://your-app.vercel.app
-```
-Then add your environment variables in the Vercel dashboard
-(**Project → Settings → Environment Variables**) — see the full list below —
-and redeploy with `vercel --prod`.
+---
 
-> Prefer no terminal? You can also push this repo to GitHub and import it at
-> vercel.com → "Add New Project", then add the env vars there.
+## Set up eBay posting (optional, for the "Post to eBay" button)
 
-### 4. Set up eBay posting (optional, for the "Post to eBay" button)
 1. At <https://developer.ebay.com/> create a **Production keyset**. Note the
    **App ID (Client ID)** and **Cert ID (Client Secret)**.
 2. Under that keyset → **User Tokens** → **Add eBay Redirect URL (RuName)**.
    Set, using your deployed URL:
-   - **Auth accepted URL:** `https://your-app.vercel.app/api/ebay/callback`
-   - **Auth declined URL:** `https://your-app.vercel.app/?ebay=declined`
-   - **Privacy policy URL:** `https://your-app.vercel.app/privacy`
+   - **Auth accepted URL:** `https://your-app.example.com/api/ebay/callback`
+   - **Auth declined URL:** `https://your-app.example.com/?ebay=declined`
+   - **Privacy policy URL:** `https://your-app.example.com/privacy`
    - Choose **OAuth** (not Auth'n'Auth).
 3. Copy the generated **RuName** — the short identifier (like `Name-XXXX-XXXX-XXXX`),
    **not** the long "eBay Production Sign In (OAuth)" URL shown on the same page.
-4. Put all the values into Vercel's env vars (below) and redeploy.
+4. Put all the values into your environment variables (below) and redeploy.
 5. On the live site, click **Connect eBay**, approve on eBay, and paste the URL
    from eBay's confirmation page back into the app. Done (lasts ~18 months).
 
@@ -146,13 +135,13 @@ and redeploy with `vercel --prod`.
 | `EBAY_CLIENT_SECRET` | for posting | eBay Cert ID |
 | `EBAY_RU_NAME` | for posting | Your eBay RuName — the short `Name-XXXX-XXXX-XXXX` identifier, **not** the long "Sign In (OAuth)" URL |
 | `SESSION_SECRET` | for posting | Random string to encrypt your eBay token. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `APP_URL` | for posting | Your deployed URL, e.g. `https://your-app.vercel.app` |
+| `APP_URL` | for posting | Your deployed URL, e.g. `https://your-app.example.com` |
 | `EBAY_LOCATION_POSTAL_CODE` | optional | Your ZIP (only used once to create an eBay inventory location) |
 | `EBAY_DEFAULT_PACKAGE_WEIGHT_OZ` | optional | Default package weight in ounces (16 = 1 lb) sent to eBay so **calculated-shipping** policies can publish (avoids eBay error 25020). Editable per listing on eBay. |
 | `EBAY_DEFAULT_PACKAGE_LENGTH_IN` / `_WIDTH_IN` / `_HEIGHT_IN` | optional | Default package dimensions in inches (defaults 12 × 9 × 3). |
 
 **Never commit real keys.** `.env.local` is gitignored; production keys live in
-Vercel only.
+your host's environment settings (e.g. Coolify → Environment Variables) only.
 
 ---
 
@@ -161,7 +150,7 @@ Vercel only.
 ```mermaid
 flowchart TD
     U["🧑 You — browser / phone<br/>(photos resized client-side)"]
-    subgraph V["Your app on Vercel (Next.js)"]
+    subgraph V["Your self-hosted app (Next.js in Docker)"]
         S["/api/sort<br/>group → verify → un-split"]
         A["/api/analyze<br/>write one listing"]
         E["/api/ebay/*<br/>connect + publish"]
@@ -185,8 +174,10 @@ flowchart TD
 - **`/api/analyze`**: writes a listing for one item from its photos.
 - **`/api/ebay/*`**: OAuth connect (encrypted-cookie token) + the
   inventory→offer→publish flow, with recovery for eBay's category/aspect quirks.
-- **Stack**: Next.js (App Router) + TypeScript, deployed on Vercel. Nothing is
-  stored server-side; photos are used to build listings and discarded.
+- **`/api/health`**: unauthenticated liveness probe for container health checks.
+- **Stack**: Next.js (App Router) + TypeScript, packaged as a standalone Docker
+  image. Nothing is stored server-side; photos are used to build listings and
+  discarded.
 
 ---
 
@@ -194,7 +185,8 @@ flowchart TD
 
 - **Anthropic**: a few cents per item (sorting + writing). You set your own key.
 - **eBay**: normal eBay selling fees apply to listings you post.
-- **Vercel**: free Hobby tier is plenty for personal use.
+- **Hosting**: a small VPS (a few dollars a month) is plenty for personal use;
+  Coolify itself is free and open source.
 
 ---
 
