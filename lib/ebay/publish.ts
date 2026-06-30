@@ -23,6 +23,13 @@ import type { ListingResult } from "../types";
 
 // ── Constants (from the Python script) ───────────────────────────────────────
 
+// OFFLINE FALLBACK ONLY. The live path resolves the correct leaf category for
+// the active marketplace via suggestLeafCategory() (Taxonomy API); this map is
+// used only when that call is unavailable. eBay category IDs are PER-MARKETPLACE
+// (UK tree = 3, US tree = 0, …), so these must match your EBAY_CATEGORY_TREE_ID.
+// The values below are seeded for the US tree (0); regenerate them for your
+// marketplace with `npm run refresh:categories` (see README → "Category IDs and
+// your marketplace") and paste the output here.
 const CATEGORY_MAP: Record<string, string> = {
   womens_top: "15724", womens_dress: "63861", womens_skirt: "11554",
   womens_pants: "57988", womens_coat: "57990", womens_sweater: "63864",
@@ -44,6 +51,8 @@ const CATEGORY_MAP: Record<string, string> = {
   stamp: "260", ephemera: "165800", other: "99",
 };
 
+// Generic leaves tried on a 25005 "not a leaf" error. Also marketplace-specific
+// (US tree seed) — `npm run refresh:categories` regenerates these too.
 const LEAF_FALLBACKS = ["1463", "22733", "2550", "48108", "316", "171485", "2624", "2613"];
 
 const CONDITION_ALIASES: Record<string, string> = {

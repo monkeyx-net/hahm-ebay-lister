@@ -153,6 +153,41 @@ your host's environment settings (e.g. Coolify → Environment Variables) only.
 
 ---
 
+## Category IDs and your marketplace
+
+eBay category IDs are **per-marketplace** — the UK category tree is id `3`, the
+US tree is `0`, Germany `77`, and so on. Some IDs coincide between sites but many
+don't, so a leaf that is correct on eBay.com can be the wrong category (or not a
+leaf at all) on eBay.co.uk.
+
+In normal operation this is handled for you: when an item is published the app
+asks eBay's **Taxonomy API** for the correct leaf category for the active tree
+(`EBAY_CATEGORY_TREE_ID`) from the listing's title + hint. The static
+`CATEGORY_MAP` / `LEAF_FALLBACKS` tables in `lib/ebay/publish.ts` are only an
+**offline fallback** for the rare case where that lookup is unavailable.
+
+Those fallback tables ship seeded with **US** IDs. To regenerate them for your
+marketplace (e.g. UK), run the generator — it resolves every category against
+eBay's Taxonomy API for whatever tree you're configured for and prints a
+ready-to-paste block:
+
+```bash
+EBAY_CLIENT_ID=...      \
+EBAY_CLIENT_SECRET=...  \
+EBAY_RU_NAME=...        \
+EBAY_CATEGORY_TREE_ID=3 \   # 3 = UK (default), 0 = US, 77 = DE …
+EBAY_MARKETPLACE_ID=EBAY_GB \
+npm run refresh:categories
+```
+
+Review the resolved IDs in the output, then paste the `CATEGORY_MAP` and
+`LEAF_FALLBACKS` blocks into `lib/ebay/publish.ts` and commit. Re-run this
+whenever you change `EBAY_MARKETPLACE_ID` / `EBAY_CATEGORY_TREE_ID`. (The script
+only **prints** the new tables — it never edits the source for you, so you stay
+in control of what gets committed.)
+
+---
+
 ## How it works (for the curious)
 
 ```mermaid
