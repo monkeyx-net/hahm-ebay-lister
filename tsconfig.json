@@ -11,13 +11,12 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
-    "incremental": true,
-    "plugins": [{ "name": "next" }],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
     "paths": {
       "@/*": ["./*"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["app", "lib", "server", "src", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "dist-server"]
 }

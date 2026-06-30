@@ -1,10 +1,3 @@
-import type { Metadata } from "next";
-
-export const metadata: Metadata = {
-  title: "Privacy Policy — Listing Writer",
-  description: "How Listing Writer handles your data.",
-};
-
 export default function PrivacyPage() {
   return (
     <main className="wrap">

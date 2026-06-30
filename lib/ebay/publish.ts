@@ -15,7 +15,7 @@ import {
   acceptedConditionIds,
   type AspectMeta,
 } from "./taxonomy";
-import type { ListingResult } from "@/lib/types";
+import type { ListingResult } from "../types";
 
 // ── Constants (from the Python script) ───────────────────────────────────────
 

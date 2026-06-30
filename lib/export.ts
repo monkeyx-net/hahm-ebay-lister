@@ -1,4 +1,4 @@
-import type { ItemGroup, ListingResult } from "@/lib/types";
+import type { ItemGroup, ListingResult } from "./types";
 
 function priceNumber(value: ListingResult["suggested_price"]): string {
   const n = typeof value === "string" ? parseFloat(value) : value;

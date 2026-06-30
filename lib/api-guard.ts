@@ -1,4 +1,3 @@
-import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
 /**
@@ -13,13 +12,16 @@ import crypto from "crypto";
  * but FAILS CLOSED in production (NODE_ENV=production): every guarded route
  * returns 503 until the variable is configured. A forgotten secret must never
  * silently expose money-spending endpoints.
+ *
+ * Framework-neutral: takes a Web `Request` and returns a Web `Response`
+ * (or null to proceed), so it works under any Web-standard server (Hono).
  */
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 
-// Per-serverless-instance limiter. Not a global guarantee (each warm lambda
-// has its own map), but it blunts burst abuse at zero infra cost.
+// Per-process limiter. Not a global guarantee behind multiple replicas, but it
+// blunts burst abuse at zero infra cost.
 const hits = new Map<string, number[]>();
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -28,7 +30,14 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ha, hb);
 }
 
-function clientIp(req: NextRequest): string {
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function clientIp(req: Request): string {
   return (
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     req.headers.get("x-real-ip") ||
@@ -50,11 +59,11 @@ function rateLimited(ip: string): boolean {
  * Rate limiting only — for routes that must stay reachable without the access
  * code (the eBay OAuth callback, the status probe) but shouldn't be hammered.
  */
-export function rateLimitRequest(req: NextRequest): NextResponse | null {
+export function rateLimitRequest(req: Request): Response | null {
   if (rateLimited(clientIp(req))) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, error: "Too many requests — wait a minute and try again." },
-      { status: 429 }
+      429
     );
   }
   return null;
@@ -63,7 +72,7 @@ export function rateLimitRequest(req: NextRequest): NextResponse | null {
 /**
  * Returns an error response when the request isn't allowed, or null to proceed.
  */
-export function guardApiRequest(req: NextRequest): NextResponse | null {
+export function guardApiRequest(req: Request): Response | null {
   const limited = rateLimitRequest(req);
   if (limited) return limited;
 
@@ -71,13 +80,13 @@ export function guardApiRequest(req: NextRequest): NextResponse | null {
   if (!secret) {
     // Fail closed in production — never run a deployed app without an access code.
     if (process.env.NODE_ENV === "production") {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error:
             "This deployment has no APP_SECRET configured. Set it in your environment variables (or Coolify → Environment), then redeploy.",
         },
-        { status: 503 }
+        503
       );
     }
     return null; // local development only
@@ -85,9 +94,9 @@ export function guardApiRequest(req: NextRequest): NextResponse | null {
 
   const provided = req.headers.get("x-app-secret") ?? "";
   if (!provided || !timingSafeEqual(provided, secret)) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, code: "ACCESS_CODE_REQUIRED", error: "Access code required." },
-      { status: 401 }
+      401
     );
   }
 
@@ -99,7 +108,7 @@ export function safeErrorResponse(
   context: string,
   e: unknown,
   fallback: string
-): NextResponse {
+): Response {
   console.error(`[${context}]`, e);
-  return NextResponse.json({ ok: false, error: fallback }, { status: 500 });
+  return jsonResponse({ ok: false, error: fallback }, 500);
 }
