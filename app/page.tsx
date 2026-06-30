@@ -13,9 +13,16 @@ import type {
   AnalyzeResponse,
   ItemGroup,
   ListingResult,
+  MarketConfig,
   Photo,
   SortResponse,
 } from "@/lib/types";
+
+// UK/GBP defaults; overwritten by /api/ebay/status for the active marketplace.
+const DEFAULT_MARKET: MarketConfig = {
+  currencySymbol: "£",
+  itemBaseUrl: "https://www.ebay.co.uk/itm/",
+};
 
 type Step = "upload" | "review" | "listings";
 // Keep a whole batch's sort payload comfortably under the server's request-body
@@ -74,6 +81,7 @@ export default function Home() {
   const [sorting, setSorting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ebayConnected, setEbayConnected] = useState(false);
+  const [market, setMarket] = useState<MarketConfig>(DEFAULT_MARKET);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const photoMap = useMemo(() => {
@@ -94,7 +102,13 @@ export default function Home() {
     const check = () =>
       fetch("/api/ebay/status", { cache: "no-store" })
         .then((r) => r.json())
-        .then((d) => setEbayConnected(Boolean(d.connected)))
+        .then((d) => {
+          setEbayConnected(Boolean(d.connected));
+          setMarket({
+            currencySymbol: d.currencySymbol || DEFAULT_MARKET.currencySymbol,
+            itemBaseUrl: d.itemBaseUrl || DEFAULT_MARKET.itemBaseUrl,
+          });
+        })
         .catch(() => setEbayConnected(false));
     check();
     const onFocus = () => check();
@@ -517,6 +531,7 @@ export default function Home() {
           groups={usableGroups}
           photoById={photoById}
           ebayConnected={ebayConnected}
+          market={market}
           onEdit={editListing}
           onRetry={writeGroup}
           onPost={postGroup}

@@ -18,6 +18,7 @@ import {
   EBAY_MARKETPLACE_ID,
   EBAY_CATEGORY_TREE_ID,
   EBAY_TOKEN_URL,
+  EBAY_LOCALE,
   basicAuthHeader,
   getEbayCreds,
 } from "./config";
@@ -64,7 +65,7 @@ async function taxGet(path: string): Promise<any | null> {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
-        "Accept-Language": "en-US",
+        "Accept-Language": EBAY_LOCALE,
       },
     }
   );
@@ -139,7 +140,7 @@ export async function acceptedConditionIds(categoryId: string): Promise<Set<numb
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
-        "Accept-Language": "en-US",
+        "Accept-Language": EBAY_LOCALE,
       },
     });
     if (!resp.ok) return new Set();

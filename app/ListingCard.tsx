@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { ItemGroup, ListingResult, Photo } from "@/lib/types";
+import type { ItemGroup, ListingResult, MarketConfig, Photo } from "@/lib/types";
 
 const TITLE_LIMIT = 80;
 
@@ -15,10 +15,10 @@ const CONDITIONS: { value: string; label: string }[] = [
   { value: "FAIR", label: "Pre-owned · Fair" },
 ];
 
-function formatPrice(value: ListingResult["suggested_price"]): string {
+function formatPrice(value: ListingResult["suggested_price"], symbol: string): string {
   const n = typeof value === "string" ? parseFloat(value) : value;
-  if (n === undefined || Number.isNaN(n)) return "$0.00";
-  return `$${n.toFixed(2)}`;
+  if (n === undefined || Number.isNaN(n)) return `${symbol}0.00`;
+  return `${symbol}${n.toFixed(2)}`;
 }
 
 function priceToInput(value: ListingResult["suggested_price"]): string {
@@ -55,6 +55,7 @@ interface ListingCardProps {
   group: ItemGroup;
   photoById: (id: string) => Photo | undefined;
   ebayConnected: boolean;
+  market: MarketConfig;
   onEdit: (groupId: string, patch: Partial<ListingResult>) => void;
   onRetry: (groupId: string) => void;
   onPost: (groupId: string) => void;
@@ -64,6 +65,7 @@ export function ListingCard({
   group,
   photoById,
   ebayConnected,
+  market,
   onEdit,
   onRetry,
   onPost,
@@ -98,7 +100,7 @@ export function ListingCard({
               </>
             )}
             {group.status === "done" && (
-              <>✅ {formatPrice(listing?.suggested_price)} · ready</>
+              <>✅ {formatPrice(listing?.suggested_price, market.currencySymbol)} · ready</>
             )}
             {group.status === "error" && (
               <span style={{ color: "var(--color-danger)" }}>
@@ -152,7 +154,7 @@ export function ListingCard({
                 Price
               </label>
               <div className="price-input">
-                <span aria-hidden="true">$</span>
+                <span aria-hidden="true">{market.currencySymbol}</span>
                 <input
                   id={`price-${group.id}`}
                   type="number"
@@ -241,7 +243,7 @@ export function ListingCard({
                   {" "}
                   ·{" "}
                   <a
-                    href={`https://www.ebay.com/itm/${group.listingId}`}
+                    href={`${market.itemBaseUrl}${group.listingId}`}
                     target="_blank"
                     rel="noopener noreferrer"
                   >

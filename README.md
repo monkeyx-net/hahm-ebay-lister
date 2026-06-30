@@ -137,7 +137,14 @@ write listings right away. (eBay posting needs the eBay setup below + a deployed
 | `EBAY_RU_NAME` | for posting | Your eBay RuName — the short `Name-XXXX-XXXX-XXXX` identifier, **not** the long "Sign In (OAuth)" URL |
 | `SESSION_SECRET` | for posting | Random string to encrypt your eBay token. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `APP_URL` | for posting | Your deployed URL, e.g. `https://your-app.example.com` |
-| `EBAY_LOCATION_POSTAL_CODE` | optional | Your ZIP (only used once to create an eBay inventory location) |
+| `EBAY_MARKETPLACE_ID` | optional | eBay site to list on. Defaults to `EBAY_GB` (UK). Use `EBAY_US`, `EBAY_DE`, etc. for other sites. |
+| `EBAY_CATEGORY_TREE_ID` | optional | Category tree for the site. Defaults to `3` (UK). US = `0`, DE = `77`. Keep consistent with the marketplace. |
+| `EBAY_SITE_ID` | optional | Trading-API site id used for photo upload. Defaults to `3` (UK). US = `0`. |
+| `EBAY_CURRENCY` | optional | ISO currency the offers are priced in. Defaults to `GBP`. e.g. `USD`, `EUR`. |
+| `EBAY_LOCALE` | optional | Locale sent as Accept/Content-Language. Defaults to `en-GB`. e.g. `en-US`, `de-DE`. |
+| `EBAY_ITEM_BASE_URL` | optional | Base URL for "View listing" links. Defaults to `https://www.ebay.co.uk/itm/`. |
+| `EBAY_LOCATION_COUNTRY` | optional | Country (ISO 3166 alpha-2) for the auto-created inventory location. Defaults to `GB`. |
+| `EBAY_LOCATION_POSTAL_CODE` | optional | Your postcode (only used once to create an eBay inventory location). Defaults to a UK postcode. |
 | `EBAY_DEFAULT_PACKAGE_WEIGHT_OZ` | optional | Default package weight in ounces (16 = 1 lb) sent to eBay so **calculated-shipping** policies can publish (avoids eBay error 25020). Editable per listing on eBay. |
 | `EBAY_DEFAULT_PACKAGE_LENGTH_IN` / `_WIDTH_IN` / `_HEIGHT_IN` | optional | Default package dimensions in inches (defaults 12 × 9 × 3). |
 

@@ -8,6 +8,10 @@ import {
   EBAY_INV_BASE,
   EBAY_MARKETPLACE_ID,
   EBAY_TRADING,
+  EBAY_SITE_ID,
+  EBAY_CURRENCY,
+  EBAY_LOCALE,
+  EBAY_LOCATION_COUNTRY,
 } from "./config";
 import {
   suggestLeafCategory,
@@ -154,8 +158,8 @@ async function ebayRequest(
       "Content-Type": "application/json",
       Accept: "application/json",
       // Node's fetch defaults Accept-Language to "*", which eBay rejects
-      // (error 25709). Pin it to a valid locale.
-      "Accept-Language": "en-US",
+      // (error 25709). Pin it to the marketplace's locale.
+      "Accept-Language": EBAY_LOCALE,
       ...(opts.extraHeaders || {}),
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -499,7 +503,7 @@ async function uploadPhoto(
   const resp = await fetch(EBAY_TRADING, {
     method: "POST",
     headers: {
-      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-SITEID": EBAY_SITE_ID,
       "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
       "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
       "X-EBAY-API-IAF-TOKEN": accessToken,
@@ -557,16 +561,17 @@ async function fetchOrCreateLocation(accessToken: string): Promise<string> {
     locationTypes: ["WAREHOUSE"],
     location: {
       address: {
-        // Set EBAY_LOCATION_POSTAL_CODE to your own ZIP. Only used the first
-        // time, to create an inventory location if you don't already have one.
-        postalCode: process.env.EBAY_LOCATION_POSTAL_CODE || "10001",
-        country: "US",
+        // Set EBAY_LOCATION_POSTAL_CODE to your own postcode. Only used the
+        // first time, to create an inventory location if you don't already have
+        // one. EBAY_LOCATION_COUNTRY defaults to GB (the UK marketplace).
+        postalCode: process.env.EBAY_LOCATION_POSTAL_CODE || "EC1A 1BB",
+        country: EBAY_LOCATION_COUNTRY,
       },
     },
   };
   await ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/location/${key}`, {
     body: payload,
-    extraHeaders: { "Content-Language": "en-US" },
+    extraHeaders: { "Content-Language": EBAY_LOCALE },
   });
   return key;
 }
@@ -587,7 +592,7 @@ export interface PublishResult {
   error?: string;
 }
 
-const CL = { "Content-Language": "en-US" };
+const CL = { "Content-Language": EBAY_LOCALE };
 
 export async function publishListing(
   accessToken: string,
@@ -692,7 +697,7 @@ export async function publishListing(
     marketplaceId: EBAY_MARKETPLACE_ID,
     format: "FIXED_PRICE",
     listingDescription: listing.description || "",
-    pricingSummary: { price: { value: String(price), currency: "USD" } },
+    pricingSummary: { price: { value: String(price), currency: EBAY_CURRENCY } },
     quantityLimitPerBuyer: 1,
     categoryId: catId,
     merchantLocationKey: setup.locationKey,

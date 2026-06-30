@@ -84,3 +84,10 @@ export interface ModelsPayload {
   sortModels: ModelOption[];
   analysisModels: ModelOption[];
 }
+
+// Marketplace presentation, served by /api/ebay/status so the UI shows prices
+// and listing links for the active eBay site (UK/GBP by default).
+export interface MarketConfig {
+  currencySymbol: string;
+  itemBaseUrl: string;
+}

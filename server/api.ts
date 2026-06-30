@@ -17,7 +17,7 @@ import {
 import { toImageBlock, type ImageBlock, type WireImage } from "../lib/images";
 import { resolveModel, isAllowedModel } from "../lib/models";
 import { sortPhotos, SortUnavailableError } from "../lib/sortPipeline";
-import { isEbayConfigured } from "../lib/ebay/config";
+import { isEbayConfigured, currencySymbol, EBAY_ITEM_BASE_URL } from "../lib/ebay/config";
 import { buildAuthorizeUrl, exchangeCode } from "../lib/ebay/oauth";
 import {
   EBAY_COOKIE,
@@ -444,7 +444,14 @@ api.get("/ebay/status", async (c) => {
 
   const configured = isEbayConfigured();
   const conn = await openConnection(getCookie(c, EBAY_COOKIE));
-  return c.json({ configured, connected: Boolean(conn) });
+  // Currency symbol + item base URL let the UI render prices and listing links
+  // for the active marketplace without baking it in at build time.
+  return c.json({
+    configured,
+    connected: Boolean(conn),
+    currencySymbol: currencySymbol(),
+    itemBaseUrl: EBAY_ITEM_BASE_URL,
+  });
 });
 
 // Forget the stored eBay connection.
