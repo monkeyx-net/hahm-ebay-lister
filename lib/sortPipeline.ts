@@ -1,12 +1,12 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { anthropicAuthError, parseModelJson } from "@/lib/anthropic";
+import { anthropicAuthError, parseModelJson } from "./anthropic";
 import {
   buildSortPrompt,
   buildVerifyGroupPrompt,
   buildVerifyMergePrompt,
   slugifyFolderName,
-} from "@/lib/prompts";
-import { labeledContent, toImageBlock, type WireImage } from "@/lib/images";
+} from "./prompts";
+import { labeledContent, toImageBlock, type WireImage } from "./images";
 
 const GROUP_MODEL = "claude-sonnet-4-6";
 const CHECK_MODEL = "claude-sonnet-4-6";

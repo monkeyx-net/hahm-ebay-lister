@@ -1,12 +1,11 @@
 # dependencies
 /node_modules
 
-# next.js
-/.next/
-/out/
-
-# production
+# build output
+/dist
+/dist-server
 /build
+/out
 
 # misc
 .DS_Store
@@ -16,13 +15,11 @@
 .env*.local
 
 # typescript
-next-env.d.ts
 *.tsbuildinfo
 
 # local preview tooling & test fixtures
 .claude/
 public/test-photos.json
 
-# vercel local project link
-.vercel
+# env (belt-and-suspenders)
 .env*

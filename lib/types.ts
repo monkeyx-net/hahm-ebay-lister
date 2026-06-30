@@ -70,3 +70,17 @@ export interface ItemGroup {
   listingId?: string;
   postError?: string;
 }
+
+// Shape of the /api/models response. Shared by the server route and the
+// ModelSelector UI so both agree on the model-picker payload.
+export interface ModelOption {
+  id: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+}
+
+export interface ModelsPayload {
+  sortModels: ModelOption[];
+  analysisModels: ModelOption[];
+}

@@ -47,8 +47,8 @@ think "your own Vercel/Heroku" on a server you control. Install it on any VPS
 
 1. **Add this repository** as a new resource → *Public/Private Git Repository*.
 2. **Set the Build Pack to `Dockerfile`** — the included `Dockerfile` builds a
-   self-contained Next.js image, and the built-in `/api/health` endpoint lets
-   Coolify monitor the container.
+   self-contained image (Vite-built SPA served by a Hono server), and the
+   built-in `/api/health` endpoint lets Coolify monitor the container.
 3. **Add the environment variables** (see the table below) in
    **Coolify → your resource → Environment Variables**. At minimum set:
    - `ANTHROPIC_API_KEY` — your Anthropic key (starts with `sk-ant-`).
@@ -91,8 +91,9 @@ cp .env.example .env.local        # then edit and set ANTHROPIC_API_KEY=sk-ant-.
 npm run dev
 ```
 
-Open <http://localhost:3000>. You can sort and write listings right away.
-(eBay posting needs the eBay setup below + a deployed URL.)
+Open <http://localhost:5173> (the Vite dev server; it proxies `/api` to the Hono
+server on `:3000`, which `npm run dev` starts alongside it). You can sort and
+write listings right away. (eBay posting needs the eBay setup below + a deployed URL.)
 
 ---
 
@@ -150,7 +151,7 @@ your host's environment settings (e.g. Coolify → Environment Variables) only.
 ```mermaid
 flowchart TD
     U["🧑 You — browser / phone<br/>(photos resized client-side)"]
-    subgraph V["Your self-hosted app (Next.js in Docker)"]
+    subgraph V["Your self-hosted app (React + Hono in Docker)"]
         S["/api/sort<br/>group → verify → un-split"]
         A["/api/analyze<br/>write one listing"]
         E["/api/ebay/*<br/>connect + publish"]
@@ -168,16 +169,18 @@ flowchart TD
     E -->|"upload photos · inventory → offer → publish"| EB
 ```
 
-- **Frontend** (`app/`): the upload → sort → review → write → post wizard.
-  Photos are shrunk in your browser before upload.
+- **Frontend** (`app/` + `src/`): the upload → sort → review → write → post
+  wizard — a React SPA built by Vite. Photos are shrunk in your browser before upload.
+- **Server** (`server/`): a Hono server that hosts the `/api/*` routes and serves
+  the built SPA from a single port.
 - **`/api/sort`**: groups photos into items (AI), with verify + un-split passes.
 - **`/api/analyze`**: writes a listing for one item from its photos.
 - **`/api/ebay/*`**: OAuth connect (encrypted-cookie token) + the
   inventory→offer→publish flow, with recovery for eBay's category/aspect quirks.
 - **`/api/health`**: unauthenticated liveness probe for container health checks.
-- **Stack**: Next.js (App Router) + TypeScript, packaged as a standalone Docker
-  image. Nothing is stored server-side; photos are used to build listings and
-  discarded.
+- **Stack**: React + Vite (client) and Hono on Node (server), TypeScript
+  throughout, packaged as a single Docker image. Nothing is stored server-side;
+  photos are used to build listings and discarded.
 
 ---
 

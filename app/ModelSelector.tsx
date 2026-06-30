@@ -7,12 +7,7 @@ import {
   saveAnalysisModel,
   saveSortModel,
 } from "@/lib/model-preferences";
-import type { ModelOption } from "@/app/api/models/route";
-
-interface ModelsPayload {
-  sortModels: ModelOption[];
-  analysisModels: ModelOption[];
-}
+import type { ModelsPayload } from "@/lib/types";
 
 export function ModelSelector() {
   const [open, setOpen] = useState(false);
