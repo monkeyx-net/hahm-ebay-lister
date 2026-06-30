@@ -27,33 +27,37 @@ import type { ListingResult } from "../types";
 // the active marketplace via suggestLeafCategory() (Taxonomy API); this map is
 // used only when that call is unavailable. eBay category IDs are PER-MARKETPLACE
 // (UK tree = 3, US tree = 0, …), so these must match your EBAY_CATEGORY_TREE_ID.
-// The values below are seeded for the US tree (0); regenerate them for your
+// The values below are seeded for the UK tree (3); regenerate them for your
 // marketplace with `npm run refresh:categories` (see README → "Category IDs and
 // your marketplace") and paste the output here.
 const CATEGORY_MAP: Record<string, string> = {
-  womens_top: "15724", womens_dress: "63861", womens_skirt: "11554",
-  womens_pants: "57988", womens_coat: "57990", womens_sweater: "63864",
-  womens_jeans: "11554", womens_clothing: "15724", womens_shoes: "3034",
-  mens_top: "57991", mens_pants: "57989", mens_coat: "57988",
-  mens_sweater: "11484", mens_jeans: "11483", mens_clothing: "1059",
-  mens_shoes: "93427", handbag: "169291", wallet: "2996", jewelry: "281",
-  scarf: "45238", belt: "2996", sunglasses: "79720", hat: "52382",
-  accessory: "4250", doll: "22733", collectible: "1463", collector_plate: "1467",
-  toy: "2550", home_decor: "10033", book: "267", knife: "7313",
-  sporting_goods: "159044", electronics: "293", camera: "625", audio: "293",
-  video_game: "139973", media: "11232", vinyl_record: "176985", cd: "176984",
-  dvd_bluray: "617", musical_instrument: "619", kitchenware: "20625",
-  glassware: "50693", pottery_ceramics: "24", art: "550", craft: "14339",
-  tool: "631", automotive: "6028", office: "25298", health_beauty: "26395",
-  small_appliance: "20667", lighting: "20697", linens: "20444", holiday: "16086",
-  board_game: "233", puzzle: "2613", plush: "2624", action_figure: "246",
-  trading_card: "183050", sports_memorabilia: "64482", coin: "11116",
-  stamp: "260", ephemera: "165800", other: "99",
+  womens_top: "53159", womens_dress: "63861", womens_skirt: "63864",
+  womens_pants: "63863", womens_coat: "63862", womens_sweater: "63866",
+  womens_jeans: "11554", womens_clothing: "53159", womens_shoes: "55793",
+  mens_top: "57990", mens_pants: "57989", mens_coat: "57988",
+  mens_sweater: "11484", mens_jeans: "11483", mens_clothing: "15687",
+  mens_shoes: "15709", handbag: "169291", wallet: "45258",
+  jewelry: "155101", scarf: "45238", belt: "3003",
+  sunglasses: "45246", hat: "52365", accessory: "50677",
+  doll: "262346", collectible: "261628", collector_plate: "261612",
+  toy: "80546", home_decor: "36025", book: "261186",
+  knife: "116005", sporting_goods: "177831", electronics: "259701",
+  camera: "31388", audio: "14990", video_game: "139973",
+  media: "617", vinyl_record: "176985", cd: "176984",
+  dvd_bluray: "617", musical_instrument: "10183", kitchenware: "20649",
+  glassware: "20696", pottery_ceramics: "262366", art: "360",
+  craft: "146545", tool: "42255", automotive: "9886",
+  office: "3295", health_beauty: "1277", small_appliance: "179309",
+  lighting: "20706", linens: "37644", holiday: "166725",
+  board_game: "180349", puzzle: "19183", plush: "230",
+  action_figure: "261068", trading_card: "261328", sports_memorabilia: "2830",
+  coin: "122486", stamp: "3478", ephemera: "126",
+  other: "88433",
 };
 
 // Generic leaves tried on a 25005 "not a leaf" error. Also marketplace-specific
-// (US tree seed) — `npm run refresh:categories` regenerates these too.
-const LEAF_FALLBACKS = ["1463", "22733", "2550", "48108", "316", "171485", "2624", "2613"];
+// (UK tree seed) — `npm run refresh:categories` regenerates these too.
+const LEAF_FALLBACKS = ["261628", "261068", "36025", "261186", "176984", "230", "19183", "155101"];
 
 const CONDITION_ALIASES: Record<string, string> = {
   NEW: "NEW_WITH_TAGS",

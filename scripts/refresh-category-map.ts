@@ -18,7 +18,7 @@
  *
  * USAGE
  * -----
- *   EBAY_CLIENT_ID=...      \
+ *   EBAY_CLIENT_ID=...     \
  *   EBAY_CLIENT_SECRET=...  \
  *   EBAY_RU_NAME=...        \
  *   EBAY_CATEGORY_TREE_ID=3 \   # 3 = UK (the default), 0 = US, 77 = DE, ...
@@ -136,7 +136,7 @@ async function main() {
   getEbayCreds();
 
   console.error(
-    `Resolving categories for ${EBAY_MARKETPLACE_ID} (category tree ${EBAY_CATEGORY_TREE_ID})…\n`
+    `Resolving categories for ${EBAY_MARKETPLACE_ID} (category tree ${EBAY_CATEGORY_TREE_ID})…\n`,
   );
 
   const resolved: Record<string, string> = {};
@@ -175,14 +175,16 @@ async function main() {
     .map((f) => `"${f}"`)
     .join(", ")}];\n`;
 
-  console.log(`\n// Generated for ${EBAY_MARKETPLACE_ID}, tree ${EBAY_CATEGORY_TREE_ID}\n`);
+  console.log(
+    `\n// Generated for ${EBAY_MARKETPLACE_ID}, tree ${EBAY_CATEGORY_TREE_ID}\n`,
+  );
   console.log(map);
   console.log(leaf);
 
   if (unresolved.length) {
     console.error(
       `\n⚠️  ${unresolved.length} categor${unresolved.length === 1 ? "y" : "ies"} did not resolve ` +
-        `(${unresolved.join(", ")}). Keep the existing values for those, or refine the query in this script.`
+        `(${unresolved.join(", ")}). Keep the existing values for those, or refine the query in this script.`,
     );
   }
 }

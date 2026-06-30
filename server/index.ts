@@ -19,6 +19,12 @@ const isProd = process.env.NODE_ENV === "production";
 // vars come from the host (Coolify / Docker env), so there's nothing to load.
 if (!isProd) {
   try {
+    // process.loadEnvFile keeps vars already in the environment, so an empty
+    // ANTHROPIC_API_KEY="" inherited from the launching shell would shadow the
+    // real value in .env.local. Drop empty vars first so the file wins.
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v === "") delete process.env[k];
+    }
     process.loadEnvFile(".env.local");
   } catch {
     /* no .env.local — that's fine for sorting/writing without secrets */
