@@ -126,12 +126,21 @@ const condCache = new Map<string, Set<number>>();
 // Lets us pick a condition the category actually allows — fashion leaves reject
 // the classic USED_VERY_GOOD/GOOD/ACCEPTABLE ids (4000/5000/6000), accepting
 // only New variants plus 2990/3000/3010, which is the source of error 25021.
-export async function acceptedConditionIds(categoryId: string): Promise<Set<number>> {
+//
+// Prefer the seller's user token when the caller has one: the client-credentials
+// app token can be rejected by the Metadata API (scope), and a silent failure
+// here is what made every apparel item publish as generic id 3000 — which eBay
+// displays as "Pre-owned – Good" in clothing categories regardless of the item's
+// real grade.
+export async function acceptedConditionIds(
+  categoryId: string,
+  userToken?: string
+): Promise<Set<number>> {
   if (!categoryId) return new Set();
   const cached = condCache.get(categoryId);
   if (cached) return cached;
   try {
-    const token = await appToken();
+    const token = userToken || (await appToken());
     const url =
       `${EBAY_META_BASE}/marketplace/${EBAY_MARKETPLACE_ID}` +
       `/get_item_condition_policies?filter=categoryIds:%7B${encodeURIComponent(categoryId)}%7D`;
@@ -142,7 +151,13 @@ export async function acceptedConditionIds(categoryId: string): Promise<Set<numb
         "Accept-Language": "en-US",
       },
     });
-    if (!resp.ok) return new Set();
+    if (!resp.ok) {
+      // Don't fail silently — this is exactly the path that mis-grades items.
+      console.warn(
+        `[ebay/taxonomy] condition policies unavailable for category ${categoryId} (HTTP ${resp.status})`
+      );
+      return new Set();
+    }
     const data = await resp.json().catch(() => null);
     const ids = new Set<number>();
     for (const p of data?.itemConditionPolicies ?? [])
@@ -152,7 +167,10 @@ export async function acceptedConditionIds(categoryId: string): Promise<Set<numb
       }
     condCache.set(categoryId, ids);
     return ids;
-  } catch {
+  } catch (e) {
+    console.warn(
+      `[ebay/taxonomy] condition policies failed for category ${categoryId}: ${(e as Error).message}`
+    );
     return new Set();
   }
 }

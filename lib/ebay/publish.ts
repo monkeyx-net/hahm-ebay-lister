@@ -15,6 +15,8 @@ import {
   acceptedConditionIds,
   type AspectMeta,
 } from "./taxonomy";
+import { clipAspectValue, matchAllowed, canonicalizeAspectKeys } from "./aspects";
+import { fillRecommendedAspects } from "./aspectFill";
 import type { ListingResult } from "@/lib/types";
 
 // ── Constants (from the Python script) ───────────────────────────────────────
@@ -219,8 +221,18 @@ function isApparelConditionPolicy(acceptedIds: Set<number>): boolean {
   return acceptedIds.has(2990) || acceptedIds.has(3010);
 }
 
-function conditionIdsForGrade(grade: string, acceptedIds: Set<number>): number[] {
-  const apparel = isApparelConditionPolicy(acceptedIds);
+function conditionIdsForGrade(
+  grade: string,
+  acceptedIds: Set<number>,
+  catKey: string
+): number[] {
+  // When eBay's condition metadata is unavailable, fall back to the category
+  // key so apparel still prefers 2990 (Pre-owned – Excellent). Without this,
+  // a silent metadata failure sent every clothing item as id 3000 — which eBay
+  // displays as "Pre-owned – Good" in fashion categories, whatever the grade.
+  const apparel =
+    isApparelConditionPolicy(acceptedIds) ||
+    (!acceptedIds.size && APPAREL_CATEGORIES.has(catKey));
   const preferences = apparel ? APPAREL_CONDITION_ID_PREFERENCES : GENERAL_CONDITION_ID_PREFERENCES;
   const safeIds = apparel ? APPAREL_SAFE_CONDITION_IDS : GENERAL_SAFE_CONDITION_IDS;
   const preferred = preferences[grade] || preferences.GOOD;
@@ -240,10 +252,14 @@ function conditionIdsForGrade(grade: string, acceptedIds: Set<number>): number[]
 // Ordered eBay Inventory condition enums to try for an internal grade. The grade
 // comes from photo analysis; the allowed IDs come from the chosen leaf category's
 // Metadata policy, so apparel/books/electronics/etc. can each resolve differently.
-function conditionCandidates(grade: string | undefined, acceptedIds: Set<number>): string[] {
+function conditionCandidates(
+  grade: string | undefined,
+  acceptedIds: Set<number>,
+  catKey: string
+): string[] {
   const desired = normalizeConditionInput(grade);
   const out: string[] = [];
-  for (const id of conditionIdsForGrade(desired, acceptedIds)) {
+  for (const id of conditionIdsForGrade(desired, acceptedIds, catKey)) {
     const en = CONDITION_ID_ENUM[id];
     if (en && !out.includes(en)) out.push(en);
   }
@@ -260,19 +276,6 @@ function resolveCategory(listing: ListingResult): {
   const categoryId = explicit || mapped;
   const fallbacks = LEAF_FALLBACKS.filter((c) => c && c !== categoryId);
   return { categoryId, fallbacks };
-}
-
-// eBay rejects any item-specific (aspect) value longer than this (error 25002).
-const MAX_ASPECT_VALUE_LEN = 65;
-
-// Clip an aspect value to eBay's limit, breaking at a word boundary when the
-// truncation point lands far enough in to leave a readable phrase.
-function clipAspectValue(s: string): string {
-  const t = (s || "").trim();
-  if (t.length <= MAX_ASPECT_VALUE_LEN) return t;
-  const cut = t.slice(0, MAX_ASPECT_VALUE_LEN);
-  const lastSpace = cut.lastIndexOf(" ");
-  return (lastSpace > MAX_ASPECT_VALUE_LEN * 0.6 ? cut.slice(0, lastSpace) : cut).trim();
 }
 
 function singleValue(v: unknown): string {
@@ -343,19 +346,6 @@ function buildAspects(listing: ListingResult, catKey: string): Record<string, st
 // The static defaults above can't know what each leaf category requires, nor
 // which values its SELECTION_ONLY aspects accept. We ask eBay for both and make
 // every required aspect valid before publishing — eliminating the 25002 errors.
-
-// Match a value against eBay's allowed list, case-insensitively and tolerating
-// singular/plural (so "Unisex Adult" resolves to the valid "Unisex Adults").
-// Returns the canonical allowed value, or null if there's no match.
-function matchAllowed(value: string, allowed: string[]): string | null {
-  const ls = (value || "").trim().toLowerCase();
-  if (!ls) return null;
-  for (const v of allowed) {
-    const lv = v.toLowerCase();
-    if (lv === ls || lv === `${ls}s` || `${lv}s` === ls) return v;
-  }
-  return null;
-}
 
 // Choose a valid Department from the category's own allowed values, biased by
 // the item's gender cues. Kids categories only allow Boys/Girls/Unisex Kids, so
@@ -566,7 +556,24 @@ function pickFirstPolicy(r: EbayResp, listKey: string, idField: string): string 
   return list.length ? String(list[0][idField] || "") : "";
 }
 
+// Policies and location change rarely; refetching them for every item of a
+// batch adds four eBay calls per publish. Cache per access token for 10 min.
+const setupCache = new Map<string, { setup: AccountSetup; expiresAt: number }>();
+const SETUP_TTL_MS = 10 * 60_000;
+
 export async function fetchAccountSetup(accessToken: string): Promise<AccountSetup> {
+  const cached = setupCache.get(accessToken);
+  if (cached && cached.expiresAt > Date.now()) return cached.setup;
+  const setup = await fetchAccountSetupUncached(accessToken);
+  // Only cache complete setups — a transient miss shouldn't stick for 10 min.
+  if (setup.fulfillmentPolicyId && setup.paymentPolicyId && setup.returnPolicyId) {
+    if (setupCache.size > 50) setupCache.clear();
+    setupCache.set(accessToken, { setup, expiresAt: Date.now() + SETUP_TTL_MS });
+  }
+  return setup;
+}
+
+async function fetchAccountSetupUncached(accessToken: string): Promise<AccountSetup> {
   const mp = `marketplace_id=${EBAY_MARKETPLACE_ID}`;
   const [ful, pay, ret] = await Promise.all([
     ebayRequest(accessToken, "GET", `${EBAY_ACC_BASE}/fulfillment_policy?${mp}`),
@@ -625,9 +632,61 @@ export interface PublishResult {
   listingId?: string;
   offerId?: string;
   error?: string;
+  // The SKU already has a LIVE eBay listing — a duplicate bin batch, not a
+  // transient failure. The client uses this to avoid clobbering the earlier item.
+  alreadyListed?: boolean;
 }
 
 const CL = { "Content-Language": "en-US" };
+
+// A published offer already exists for this SKU (e.g. the same bin code was
+// reused for a second batch). Publishing again would silently overwrite the
+// LIVE listing's photos/title with the new item's — so we refuse instead.
+async function findPublishedOffer(
+  accessToken: string,
+  sku: string
+): Promise<{ offerId: string; listingId: string } | null> {
+  const r = await ebayRequest(
+    accessToken,
+    "GET",
+    `${EBAY_INV_BASE}/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${EBAY_MARKETPLACE_ID}`
+  );
+  if (!r.ok) return null; // 404 = no offers for this SKU — normal
+  for (const o of r.json?.offers ?? []) {
+    if (String(o?.status || "").toUpperCase() === "PUBLISHED") {
+      return {
+        offerId: String(o.offerId || ""),
+        listingId: String(o?.listing?.listingId || ""),
+      };
+    }
+  }
+  return null;
+}
+
+// Upload photos with limited concurrency, preserving order. Sequential uploads
+// were the slowest part of a publish (12 photos ≈ up to a minute on their own)
+// and pushed long batches into Vercel's function timeout.
+async function uploadPhotos(
+  accessToken: string,
+  images: { mediaType: string; data: string }[],
+  sku: string
+): Promise<string[]> {
+  const results: (string | null)[] = new Array(images.length).fill(null);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(4, images.length) }, async () => {
+    while (cursor < images.length) {
+      const i = cursor++;
+      results[i] = await uploadPhoto(
+        accessToken,
+        images[i].data,
+        images[i].mediaType,
+        `${sku}-${i + 1}.jpg`
+      );
+    }
+  });
+  await Promise.all(workers);
+  return results.filter((u): u is string => Boolean(u));
+}
 
 export async function publishListing(
   accessToken: string,
@@ -651,34 +710,60 @@ export async function publishListing(
     };
   }
 
-  // 1. Upload photos → EPS URLs.
-  const photoUrls: string[] = [];
-  for (const img of input.images.slice(0, 12)) {
-    const url = await uploadPhoto(accessToken, img.data, img.mediaType, `${sku}.jpg`);
-    if (url) photoUrls.push(url);
+  // 0. Refuse to clobber a live listing that already uses this SKU (a second
+  // batch from the same bin, or a re-post after a page reload).
+  const existing = await findPublishedOffer(accessToken, sku);
+  if (existing) {
+    return {
+      success: false,
+      sku,
+      alreadyListed: true,
+      offerId: existing.offerId,
+      listingId: existing.listingId,
+      error: `SKU ${sku} already has a live eBay listing. If this is a new item from the same bin, give it the next letter (or re-sort — lettering now continues automatically).`,
+    };
   }
+
+  // 1. Upload photos → EPS URLs (parallel, order preserved).
+  const photoUrls = await uploadPhotos(accessToken, input.images.slice(0, 12), sku);
   if (photoUrls.length === 0) {
     return { success: false, sku, error: "Could not upload any photos to eBay." };
   }
 
   // 2. Inventory item.
   const aspects = buildAspects(listing, catKey);
-  // Ask eBay (in parallel) for the leaf category's REQUIRED specifics and its
-  // accepted condition ids, then make both valid before creating the item.
+  // Ask eBay (in parallel) for the leaf category's specifics and its accepted
+  // condition ids, then make both valid before creating the item.
   // Non-fatal: the recovery loops below remain as a backup if eBay is slow.
   let acceptedConds = new Set<number>();
+  let aspectMeta: AspectMeta[] = [];
   try {
     const [meta, conds] = await Promise.all([
       categoryAspects(catId), // required aspects + valid values  → fixes 25002
-      acceptedConditionIds(catId), // accepted condition ids       → fixes 25021
+      // Seller token: the app token can be rejected by the Metadata API, and a
+      // silent miss here is what mis-graded conditions (see conditionIdsForGrade).
+      acceptedConditionIds(catId, accessToken), // accepted ids   → fixes 25021
     ]);
-    if (meta.length) reconcileAspects(aspects, meta, listing, catKey);
+    aspectMeta = meta;
+    if (meta.length) {
+      canonicalizeAspectKeys(aspects, meta); // model keys → eBay's exact names
+      reconcileAspects(aspects, meta, listing, catKey);
+    }
     acceptedConds = conds;
   } catch {
     /* taxonomy/metadata unavailable — proceed with best-effort values */
   }
-  const condCandidates = conditionCandidates(listing.condition, acceptedConds);
+  // Fill the remaining recommended specifics from the listing data (one cheap
+  // text-only model call) so live listings stop showing "suggested" aspects.
+  if (aspectMeta.length) {
+    await fillRecommendedAspects(listing, aspects, aspectMeta, sku);
+  }
+  const condCandidates = conditionCandidates(listing.condition, acceptedConds, catKey);
   const condition = condCandidates[0] || "USED_EXCELLENT";
+  console.log(
+    `[ebay/publish] sku=${sku} category=${catId} grade=${listing.condition} → condition=${condition}` +
+      (acceptedConds.size ? "" : " (no condition metadata — category-key fallback)")
+  );
   const inventoryItem: any = {
     product: {
       title: String(listing.title || "Untitled").slice(0, 80),
@@ -836,6 +921,18 @@ async function publishOfferWithRecovery(
 
   let r = await doPublish();
   if (r.ok) return { success: true, sku, offerId, listingId: r.json?.listingId || "" };
+
+  // The offer already went live (e.g. an earlier attempt timed out after the
+  // publish landed). That's success — recover the listing id and report it.
+  if (/already\s*published/i.test(r.text || "")) {
+    const off = await ebayRequest(accessToken, "GET", `${EBAY_INV_BASE}/offer/${offerId}`);
+    return {
+      success: true,
+      sku,
+      offerId,
+      listingId: String(off.json?.listing?.listingId || ""),
+    };
+  }
 
   let eids = errorIds(r);
 

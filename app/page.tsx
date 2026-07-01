@@ -18,10 +18,17 @@ import type {
 } from "@/lib/types";
 
 type Step = "upload" | "review" | "listings";
-// Keep a whole batch's sort payload comfortably under Vercel's 4.5 MB request
-// limit (sort sends small thumbnails for every photo at once).
-const MAX_PHOTOS = 100;
+// Big batches are sorted in chunks of SORT_CHUNK photos per request — each
+// chunk's thumbnail payload stays under Vercel's 4.5 MB body limit — then
+// stitched back together with a merge check at every chunk boundary.
+const MAX_PHOTOS = 300;
+const SORT_CHUNK = 100;
 const WRITE_CONCURRENCY = 3;
+// eBay accepts at most 12 photos per listing; sending more just bloats the
+// publish request toward Vercel's body limit.
+const MAX_PUBLISH_PHOTOS = 12;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -72,6 +79,10 @@ export default function Home() {
   const [orphanIds, setOrphanIds] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [sorting, setSorting] = useState(false);
+  const [sortProgress, setSortProgress] = useState<string | null>(null);
+  // Where bin lettering starts — continues after SKUs already on eBay, so a
+  // second batch from bin K31 gets K31-N… instead of colliding with K31-A.
+  const [skuStart, setSkuStart] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [ebayConnected, setEbayConnected] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -139,44 +150,116 @@ export default function Home() {
     setSorting(true);
     setError(null);
     try {
-      const res = await apiPost("/api/sort", {
-        // Use the small thumbnail for sorting to keep the payload small.
-        images: photos.map((p) => ({
-          mediaType: p.mediaType,
-          data: p.previewUrl.split(",")[1],
-        })),
-        sortModel: getSortModel() ?? undefined,
-      });
-      const data = (await readJson(res)) as SortResponse;
-      if (!data.ok || !data.groups) {
-        throw new Error(data.error || "Could not sort the photos.");
+      // Continue bin lettering after any SKUs already on eBay for this bin.
+      let skuOffset = 0;
+      if (binPrefix.trim()) {
+        try {
+          const r = await apiPost("/api/ebay/next-sku", { prefix: binPrefix.trim() });
+          const d = (await readJson(r)) as { ok?: boolean; nextIndex?: number };
+          if (d.ok && Number.isInteger(d.nextIndex) && (d.nextIndex as number) > 0) {
+            skuOffset = d.nextIndex as number;
+          }
+        } catch {
+          /* not connected or lookup failed — start at A like before */
+        }
       }
-      const idxToId = (i: number) => photos[i]?.id;
+
+      // Sort in chunks so each request's thumbnail payload stays small.
+      type RawGroup = { name: string; photoIds: string[] };
+      const chunkResults: RawGroup[][] = [];
+      const orphanIdsAll: string[] = [];
+      for (let off = 0; off < photos.length; off += SORT_CHUNK) {
+        const chunk = photos.slice(off, off + SORT_CHUNK);
+        if (photos.length > SORT_CHUNK) {
+          setSortProgress(
+            `Sorting photos ${off + 1}–${off + chunk.length} of ${photos.length}…`
+          );
+        }
+        const res = await apiPost("/api/sort", {
+          // Use the small thumbnail for sorting to keep the payload small.
+          images: chunk.map((p) => ({
+            mediaType: p.mediaType,
+            data: p.previewUrl.split(",")[1],
+          })),
+          sortModel: getSortModel() ?? undefined,
+        });
+        const data = (await readJson(res)) as SortResponse;
+        if (!data.ok || !data.groups) {
+          throw new Error(data.error || "Could not sort the photos.");
+        }
+        const idxToId = (i: number) => chunk[i]?.id;
+        chunkResults.push(
+          data.groups
+            .map((g) => ({
+              name: g.name,
+              photoIds: g.photoIndices.map(idxToId).filter(Boolean) as string[],
+            }))
+            .filter((g) => g.photoIds.length > 0)
+        );
+        orphanIdsAll.push(
+          ...((data.orphanIndices ?? []).map(idxToId).filter(Boolean) as string[])
+        );
+      }
+
+      // Stitch chunks back together: an item photographed across a chunk
+      // boundary lands split in two — ask the model whether the group holding
+      // the boundary's last photo and the one holding the next chunk's first
+      // photo are actually the same item.
+      const merged: RawGroup[] = [...(chunkResults[0] ?? [])];
+      for (let c = 1; c < chunkResults.length; c++) {
+        const rest = [...chunkResults[c]];
+        const lastId = photos[c * SORT_CHUNK - 1]?.id;
+        const firstId = photos[c * SORT_CHUNK]?.id;
+        const prevGroup = merged.find((g) => lastId && g.photoIds.includes(lastId));
+        const nextGroup = rest.find((g) => firstId && g.photoIds.includes(firstId));
+        if (prevGroup && nextGroup) {
+          setSortProgress("Checking for items split across batches…");
+          try {
+            const a = photoMap.get(prevGroup.photoIds[0]);
+            const b = photoMap.get(nextGroup.photoIds[0]);
+            if (a && b) {
+              const res = await apiPost("/api/merge-check", {
+                a: { mediaType: a.mediaType, data: a.previewUrl.split(",")[1] },
+                b: { mediaType: b.mediaType, data: b.previewUrl.split(",")[1] },
+                countA: prevGroup.photoIds.length,
+                countB: nextGroup.photoIds.length,
+                sortModel: getSortModel() ?? undefined,
+              });
+              const d = (await readJson(res)) as { ok?: boolean; merge?: boolean };
+              if (d.ok && d.merge) {
+                prevGroup.photoIds = [...prevGroup.photoIds, ...nextGroup.photoIds];
+                rest.splice(rest.indexOf(nextGroup), 1);
+              }
+            }
+          } catch {
+            /* boundary check is best-effort — worst case the item stays split */
+          }
+        }
+        merged.push(...rest);
+      }
+
       const assigned = new Set<string>();
-      const nextGroups: ItemGroup[] = data.groups.map((g, i) => {
-        const ids = g.photoIndices.map(idxToId).filter(Boolean) as string[];
-        ids.forEach((id) => assigned.add(id));
-        return {
-          id: newId(),
-          sku: buildSku(binPrefix, i),
-          name: g.name,
-          photoIds: ids,
-          status: "idle",
-        };
-      });
-      const orphans = (data.orphanIndices ?? [])
-        .map(idxToId)
-        .filter(Boolean) as string[];
-      orphans.forEach((id) => assigned.add(id));
+      merged.forEach((g) => g.photoIds.forEach((id) => assigned.add(id)));
+      orphanIdsAll.forEach((id) => assigned.add(id));
       // Any photo the sorter never placed shouldn't vanish — surface it.
       const leftover = photos.filter((p) => !assigned.has(p.id)).map((p) => p.id);
+
+      const nextGroups: ItemGroup[] = merged.map((g, i) => ({
+        id: newId(),
+        sku: buildSku(binPrefix, skuOffset + i),
+        name: g.name,
+        photoIds: g.photoIds,
+        status: "idle",
+      }));
+      setSkuStart(skuOffset);
       setGroups(nextGroups);
-      setOrphanIds([...orphans, ...leftover]);
+      setOrphanIds([...orphanIdsAll, ...leftover]);
       setStep("review");
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setSorting(false);
+      setSortProgress(null);
     }
   };
 
@@ -247,7 +330,7 @@ export default function Home() {
       ...prev,
       {
         id: newId(),
-        sku: buildSku(binPrefix, prev.length),
+        sku: buildSku(binPrefix, skuStart + prev.length),
         name: `new-item-${prev.length + 1}`,
         photoIds: [],
         status: "idle",
@@ -323,28 +406,50 @@ export default function Home() {
       const images = group.photoIds
         .map((id) => photoMap.get(id))
         .filter((p): p is Photo => Boolean(p))
-        .map((p) => ({ mediaType: p.mediaType, data: p.data }));
+        .map((p) => ({ mediaType: p.mediaType, data: p.data }))
+        .slice(0, MAX_PUBLISH_PHOTOS);
       setGroups((prev) =>
         prev.map((g) =>
           g.id === groupId ? { ...g, postStatus: "posting", postError: undefined } : g
         )
       );
       try {
-        const res = await apiPost("/api/ebay/publish", {
-          sku: group.sku,
-          listing: group.listing,
-          images,
-        });
-        const data = (await readJson(res)) as {
+        let data: {
           success: boolean;
           listingId?: string;
           error?: string;
-        };
-        if (!data.success) throw new Error(data.error || "eBay rejected the listing.");
+          alreadyListed?: boolean;
+        } | null = null;
+        let hadTransientRetry = false;
+        for (let attempt = 0; ; attempt++) {
+          const res = await apiPost("/api/ebay/publish", {
+            sku: group.sku,
+            listing: group.listing,
+            images,
+          });
+          // Wait out rate limits / transient platform errors instead of dying
+          // mid-batch with "try again later".
+          if (
+            attempt < 2 &&
+            (res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504)
+          ) {
+            hadTransientRetry = true;
+            await sleep(res.status === 429 ? 65_000 : 8_000);
+            continue;
+          }
+          data = await readJson(res);
+          break;
+        }
+        // A retried publish that finds the SKU already live means the earlier
+        // attempt actually landed before the timeout — that's a success.
+        if (data && !data.success && data.alreadyListed && hadTransientRetry && data.listingId) {
+          data = { success: true, listingId: data.listingId };
+        }
+        if (!data?.success) throw new Error(data?.error || "eBay rejected the listing.");
         setGroups((prev) =>
           prev.map((g) =>
             g.id === groupId
-              ? { ...g, postStatus: "posted", listingId: data.listingId }
+              ? { ...g, postStatus: "posted", listingId: data!.listingId }
               : g
           )
         );
@@ -425,8 +530,9 @@ export default function Home() {
               />
               <span className="field-hint">
                 Each item gets {binPrefix ? `${binPrefix.trim()}-A, ${binPrefix.trim()}-B` : "A, B, C"}
-                … in order, so you can find it in the bin later. You can edit any
-                SKU after sorting.
+                … in order, so you can find it in the bin later. If this bin
+                already has listings on eBay, lettering continues where it left
+                off. You can edit any SKU after sorting.
               </span>
             </div>
 
@@ -512,8 +618,8 @@ export default function Home() {
               <div className="loading-card">
                 <span className="spinner" aria-hidden="true" />
                 <span>
-                  Grouping photos by item, then double-checking for mixed-up or
-                  split items. This takes a little while for big batches.
+                  {sortProgress ??
+                    "Grouping photos by item, then double-checking for mixed-up or split items. This takes a little while for big batches."}
                 </span>
               </div>
             </section>

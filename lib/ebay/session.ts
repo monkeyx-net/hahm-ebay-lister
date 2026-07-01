@@ -76,12 +76,25 @@ export function connectionFromToken(refreshToken: string, refreshExpiresIn?: num
   return { refreshToken, refreshExpiresAt: Date.now() + ttl };
 }
 
+// Access tokens live ~2h. Minting one per publish means an extra eBay
+// round-trip on every item of a batch (and risks eBay throttling the refresh
+// grant), so cache them in the warm lambda keyed by refresh token.
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
 // Mint a short-lived access token from the stored connection cookie value.
 export async function accessTokenFromCookie(
   sealed: string | undefined
 ): Promise<string | null> {
   const conn = await openConnection(sealed);
   if (!conn) return null;
+  const cached = tokenCache.get(conn.refreshToken);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
   const token = await refreshAccessToken(conn.refreshToken);
+  if (tokenCache.size > 100) tokenCache.clear(); // bound memory
+  tokenCache.set(conn.refreshToken, {
+    token: token.access_token,
+    // Refresh 5 minutes before eBay's stated expiry.
+    expiresAt: Date.now() + Math.max(60, (token.expires_in ?? 7200) - 300) * 1000,
+  });
   return token.access_token;
 }

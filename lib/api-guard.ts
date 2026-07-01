@@ -16,7 +16,10 @@ import crypto from "crypto";
  */
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
+// High enough that a legitimate batch session (sort chunks + parallel listing
+// writes + post-all publishes + status checks) never trips it; APP_SECRET is
+// the real access gate, this only blunts anonymous hammering.
+const RATE_LIMIT_MAX_REQUESTS = 40;
 
 // Per-serverless-instance limiter. Not a global guarantee (each warm lambda
 // has its own map), but it blunts burst abuse at zero infra cost.

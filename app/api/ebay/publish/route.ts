@@ -5,7 +5,9 @@ import { fetchAccountSetup, publishListing } from "@/lib/ebay/publish";
 import type { PublishInput } from "@/lib/ebay/publish";
 
 // Photo upload + several eBay calls + recovery loops — give it room.
-export const maxDuration = 120;
+// (Uploads now run in parallel, but a 12-photo item with recovery retries can
+// still be slow; 300s is within both Hobby-with-fluid-compute and Pro limits.)
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   // Check access + rate limit BEFORE parsing the (potentially large) body.

@@ -250,6 +250,39 @@ function uniqueNames(groups: { name: string; indices: number[] }[]): SortGroup[]
   });
 }
 
+// One-off merge check between two groups that landed in DIFFERENT sort chunks
+// (the client sorts big batches 100 photos at a time; an item photographed
+// across the chunk boundary gets split). Same prompt as the in-request merge
+// step, exposed for the /api/merge-check route.
+export async function checkMergePair(
+  client: Anthropic,
+  imageA: WireImage,
+  imageB: WireImage,
+  countA: number,
+  countB: number,
+  model?: string
+): Promise<boolean> {
+  const aBlock = toImageBlock(imageA);
+  const bBlock = toImageBlock(imageB);
+  if (!aBlock || !bBlock) return false;
+  const content: Anthropic.ContentBlockParam[] = [
+    { type: "text", text: "Photo 1:" },
+    aBlock,
+    { type: "text", text: "--- Group B ---" },
+    { type: "text", text: "Photo 2:" },
+    bBlock,
+    { type: "text", text: buildVerifyMergePrompt(countA, countB) },
+  ];
+  const result = await claudeJson<{ merge?: boolean }>(
+    client,
+    model ?? CHECK_MODEL,
+    content,
+    100,
+    "merge chunk-boundary"
+  );
+  return result?.merge === true;
+}
+
 export async function sortPhotos(
   client: Anthropic,
   images: WireImage[],
