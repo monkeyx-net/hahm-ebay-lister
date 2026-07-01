@@ -93,7 +93,8 @@ npm run dev
 
 Open <http://localhost:5173> (the Vite dev server; it proxies `/api` to the Hono
 server on `:3000`, which `npm run dev` starts alongside it). You can sort and
-write listings right away. (eBay posting needs the eBay setup below + a deployed URL.)
+write listings right away. (eBay posting needs the eBay setup below; you can
+connect eBay from `localhost` too — see **Connecting eBay locally** below.)
 
 ---
 
@@ -112,6 +113,20 @@ write listings right away. (eBay posting needs the eBay setup below + a deployed
 4. Put all the values into your environment variables (below) and redeploy.
 5. On the live site, click **Connect eBay**, approve on eBay, and paste the URL
    from eBay's confirmation page back into the app. Done (lasts ~18 months).
+
+> **Connecting eBay locally (no deploy needed).** OAuth works on `localhost` too —
+> the token exchange is server-side, and the app has a **paste box** for the
+> redirect URL. eBay only requires the RuName's *Auth accepted URL* to be a valid
+> **public HTTPS** string (it rejects `http://localhost`) — it doesn't have to be
+> live. Two ways:
+>
+> - **Paste (simplest):** click **Open eBay ↗**, approve, then copy the URL eBay
+>   sends you to (it contains `?code=…`) and paste it into the app's box. Works even
+>   if that URL 404s — the code is right there in the address bar.
+> - **Tunnel (auto-callback):** expose `localhost:3000` over HTTPS (ngrok /
+>   Cloudflare Tunnel), set that as the accepted URL, and browse the app through the
+>   tunnel origin. In development the callback also falls back to the paste box if
+>   the CSRF `state` cookie doesn't line up across origins.
 
 > **"Marketplace account deletion" compliance.** When you create a production
 > keyset, eBay flags it **"not compliant"** and asks for a *Marketplace account

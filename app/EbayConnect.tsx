@@ -31,7 +31,16 @@ export function EbayConnect() {
     if (e === "connected") setNotice({ ok: true, msg: "eBay account connected!" });
     else if (e === "declined")
       setNotice({ ok: false, msg: "eBay connection was declined." });
-    else if (e === "error")
+    else if (e === "paste") {
+      // Dev fallback: the callback handed us the code because the CSRF state
+      // didn't match (common when a local tunnel crosses origins). Prefill the
+      // paste box so the user just clicks "Finish connecting".
+      const code = params.get("code");
+      if (code) {
+        setPasteValue(code);
+        setNotice({ ok: true, msg: "Got your code — click “Finish connecting”." });
+      }
+    } else if (e === "error")
       setNotice({ ok: false, msg: params.get("msg") || "eBay connection failed." });
     if (e) window.history.replaceState({}, "", window.location.pathname);
   }, [refresh]);

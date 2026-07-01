@@ -415,6 +415,14 @@ api.get("/ebay/callback", async (c) => {
     return c.redirect(appUrl(c, "/?ebay=error&msg=No+authorization+code"));
   }
   if (!state || !expectedState || state !== expectedState) {
+    // In local development the authorize flow and this callback often cross
+    // origins (e.g. an HTTPS tunnel in front of the dev server), so the
+    // short-lived CSRF state cookie doesn't line up. Rather than dead-end, hand
+    // the code to the in-app paste box so you can finish connecting. Production
+    // stays strict — a state mismatch there is a real error.
+    if (process.env.NODE_ENV !== "production") {
+      return c.redirect(appUrl(c, `/?ebay=paste&code=${encodeURIComponent(code)}`));
+    }
     return c.redirect(appUrl(c, "/?ebay=error&msg=State+mismatch"));
   }
 
