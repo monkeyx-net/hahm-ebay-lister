@@ -81,6 +81,33 @@ cp .env.example .env.local        # then edit and set ANTHROPIC_API_KEY=sk-ant-.
 <http://localhost:3000>. To view logs: `docker compose logs -f`. To stop:
 `docker compose down`.
 
+### Rebuild after changing the code
+
+The container runs the **built** output (`dist/` + `dist-server/`), baked into the
+image at build time — it does not read your source at runtime. So after pulling or
+editing any `.ts` / `.tsx`, rebuild the image and recreate the container:
+
+```bash
+git pull                 # if you're picking up new commits
+docker compose build     # recompile client + server into a fresh image
+docker compose up -d     # recreate the container on the new image
+# shortcut: ./deploy.sh  # runs both of the above
+```
+
+Confirm it came back up:
+
+```bash
+docker compose ps            # STATUS should read "Up … (healthy)"
+docker compose logs -f app   # expect: Listening on http://localhost:3000 (production)
+```
+
+> **Only changed environment variables** (`.env.local`)? No rebuild needed — run
+> `docker compose up -d --force-recreate` so the container re-reads `env_file`.
+> Rebuild only when the **code** changes.
+>
+> **On Coolify**, the rebuild runs automatically on `git push` (or click
+> **Redeploy**); `docker compose build` here rebuilds only your local container.
+
 ## Run locally for development (no Docker)
 
 ```bash
