@@ -116,6 +116,23 @@ export default function Home() {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
+  // Keep auto-generated SKUs in sync with the bin code, so entering or changing
+  // it after sorting updates every item you haven't hand-edited (buildSku is
+  // pure, so bail out when nothing changed to avoid a needless re-render).
+  useEffect(() => {
+    setGroups((prev) => {
+      let changed = false;
+      const next = prev.map((g) => {
+        if (g.skuEdited) return g;
+        const sku = buildSku(binPrefix, g.skuIndex);
+        if (sku === g.sku) return g;
+        changed = true;
+        return { ...g, sku };
+      });
+      return changed ? next : prev;
+    });
+  }, [binPrefix]);
+
   // ── Upload ──────────────────────────────────────────────
   const addFiles = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -173,6 +190,7 @@ export default function Home() {
         return {
           id: newId(),
           sku: buildSku(binPrefix, i),
+          skuIndex: i,
           name: g.name,
           photoIds: ids,
           status: "idle",
@@ -202,7 +220,8 @@ export default function Home() {
 
   const renameSku = (groupId: string, sku: string) =>
     setGroups((prev) =>
-      prev.map((g) => (g.id === groupId ? { ...g, sku } : g))
+      // Mark as hand-edited so a later bin-code change won't overwrite it.
+      prev.map((g) => (g.id === groupId ? { ...g, sku, skuEdited: true } : g))
     );
 
   const movePhoto = (photoId: string, toGroupId: string | "orphans") => {
@@ -233,16 +252,22 @@ export default function Home() {
     });
 
   const addGroup = () =>
-    setGroups((prev) => [
-      ...prev,
-      {
-        id: newId(),
-        sku: buildSku(binPrefix, prev.length),
-        name: `new-item-${prev.length + 1}`,
-        photoIds: [],
-        status: "idle",
-      },
-    ]);
+    setGroups((prev) => {
+      // Allocate the next unused suffix, never reusing one freed by a delete —
+      // otherwise a new item could collide with an existing item's SKU.
+      const skuIndex = prev.reduce((max, g) => Math.max(max, g.skuIndex), -1) + 1;
+      return [
+        ...prev,
+        {
+          id: newId(),
+          sku: buildSku(binPrefix, skuIndex),
+          skuIndex,
+          name: `new-item-${prev.length + 1}`,
+          photoIds: [],
+          status: "idle",
+        },
+      ];
+    });
 
   // ── Write listings ──────────────────────────────────────
   const writeGroup = useCallback(

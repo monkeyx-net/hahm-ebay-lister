@@ -60,6 +60,8 @@ export type PostStatus = "idle" | "posting" | "posted" | "error";
 export interface ItemGroup {
   id: string;
   sku: string; // bin reference, e.g. "K75-A"
+  skuIndex: number; // stable suffix index (0→A, 1→B, …); survives deletes so bin letters don't renumber
+  skuEdited?: boolean; // set once the user hand-edits the SKU, so a bin-code change won't overwrite it
   name: string;
   photoIds: string[];
   listing?: ListingResult;
