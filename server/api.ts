@@ -159,6 +159,18 @@ api.post("/analyze", async (c) => {
             },
           ],
         });
+        // Cost visibility. Verified via scripts/measure-cache.ts: the built system
+        // prompt is ~5,361 tokens on claude-opus-4-8 — above the 4096-token minimum
+        // cacheable prefix — so the ephemeral cache above DOES fire. Expect
+        // cache_read>0 on the 2nd+ same-profile request within the 5-min window.
+        const u = resp.usage;
+        console.log(
+          `[analyze] usage model=${analysisModel} profile=${profile} ` +
+            `input=${u.input_tokens} ` +
+            `cache_write=${u.cache_creation_input_tokens ?? 0} ` +
+            `cache_read=${u.cache_read_input_tokens ?? 0} ` +
+            `output=${u.output_tokens}`
+        );
         const listing = parseModelJson<ListingResult>(firstText(resp));
         listing.item_profile = profile;
         return c.json({ ok: true, listing });
