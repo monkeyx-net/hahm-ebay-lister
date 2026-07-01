@@ -769,6 +769,32 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+  cursor: grab;
+  transition: opacity var(--duration) var(--ease), transform var(--duration) var(--ease);
+}
+
+.board-thumb:active {
+  cursor: grabbing;
+}
+
+.board-thumb.drag-source {
+  opacity: 0.35;
+  transform: scale(0.92);
+}
+
+.board-thumb.drag-over {
+  position: relative;
+}
+
+.board-thumb.drag-over::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .board-thumb img {

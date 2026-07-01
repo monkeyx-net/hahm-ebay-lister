@@ -244,6 +244,16 @@ export default function Home() {
     });
   };
 
+  const reorderPhoto = (groupId: string, photoId: string, toIndex: number) =>
+    setGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        const ids = g.photoIds.filter((id) => id !== photoId);
+        ids.splice(Math.min(toIndex, ids.length), 0, photoId);
+        return { ...g, photoIds: ids };
+      })
+    );
+
   const deleteGroup = (groupId: string) =>
     setGroups((prev) => {
       const target = prev.find((g) => g.id === groupId);
@@ -546,6 +556,7 @@ export default function Home() {
           onRename={rename}
           onRenameSku={renameSku}
           onMovePhoto={movePhoto}
+          onReorderPhoto={reorderPhoto}
           onDeleteGroup={deleteGroup}
           onAddGroup={addGroup}
           onWriteAll={writeAll}
