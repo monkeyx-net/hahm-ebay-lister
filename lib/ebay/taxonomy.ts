@@ -36,7 +36,7 @@ export interface AspectMeta {
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
-async function appToken(): Promise<string> {
+export async function appToken(): Promise<string> {
   const now = Date.now();
   if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.token;
   const creds = getEbayCreds();

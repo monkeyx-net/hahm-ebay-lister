@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ItemGroup, ListingResult, MarketConfig, Photo } from "@/lib/types";
+import { apiPost } from "@/lib/api-client";
 
 const TITLE_LIMIT = 80;
 
@@ -55,6 +56,7 @@ interface ListingCardProps {
   group: ItemGroup;
   photoById: (id: string) => Photo | undefined;
   ebayConnected: boolean;
+  ebayConfigured: boolean;
   market: MarketConfig;
   onEdit: (groupId: string, patch: Partial<ListingResult>) => void;
   onRetry: (groupId: string) => void;
@@ -65,6 +67,7 @@ export function ListingCard({
   group,
   photoById,
   ebayConnected,
+  ebayConfigured,
   market,
   onEdit,
   onRetry,
@@ -73,6 +76,45 @@ export function ListingCard({
   const [open, setOpen] = useState(true);
   const listing = group.listing;
   const cover = photoById(group.photoIds[0]);
+
+  // eBay "comps": median/range of comparable ACTIVE listings, fetched on demand.
+  const [comps, setComps] = useState<
+    { low: number; high: number; median: number; count: number } | null
+  >(null);
+  const [compsBusy, setCompsBusy] = useState(false);
+  const [compsMsg, setCompsMsg] = useState<string | null>(null);
+
+  const checkComps = async () => {
+    const query =
+      listing?.title?.trim() ||
+      [listing?.brand, listing?.item_type].filter(Boolean).join(" ").trim();
+    if (!query) return;
+    setCompsBusy(true);
+    setCompsMsg(null);
+    try {
+      const r = await apiPost("/api/ebay/comps", { query });
+      const data = (await r.json()) as {
+        ok: boolean;
+        low?: number;
+        high?: number;
+        median?: number;
+        count?: number;
+        error?: string;
+      };
+      if (!data.ok) throw new Error(data.error || "No comps found.");
+      setComps({
+        low: data.low!,
+        high: data.high!,
+        median: data.median!,
+        count: data.count!,
+      });
+    } catch (e) {
+      setComps(null);
+      setCompsMsg((e as Error).message);
+    } finally {
+      setCompsBusy(false);
+    }
+  };
 
   const specifics = useMemo(() => {
     const entries = Object.entries(listing?.item_specifics ?? {});
@@ -170,6 +212,51 @@ export function ListingCard({
                   }
                 />
               </div>
+              {ebayConfigured && (
+                <div
+                  className="comps-row"
+                  style={{
+                    marginTop: 6,
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: "0.85em",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={checkComps}
+                    disabled={compsBusy}
+                    title="Median & range of comparable active eBay listings"
+                  >
+                    {compsBusy ? "Checking eBay…" : "📊 eBay comps"}
+                  </button>
+                  {comps && (
+                    <span style={{ opacity: 0.9 }}>
+                      {formatPrice(comps.low, market.currencySymbol)}–
+                      {formatPrice(comps.high, market.currencySymbol)} · median{" "}
+                      <strong>
+                        {formatPrice(comps.median, market.currencySymbol)}
+                      </strong>{" "}
+                      <span style={{ opacity: 0.6 }}>({comps.count} active)</span>{" "}
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() =>
+                          onEdit(group.id, { suggested_price: comps.median })
+                        }
+                      >
+                        Use median
+                      </button>
+                    </span>
+                  )}
+                  {compsMsg && (
+                    <span style={{ color: "var(--color-danger)" }}>{compsMsg}</span>
+                  )}
+                </div>
+              )}
             </div>
             <div className="stat editable">
               <label className="k" htmlFor={`cond-${group.id}`}>

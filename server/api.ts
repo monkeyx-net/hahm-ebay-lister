@@ -19,6 +19,7 @@ import { resolveModel, isAllowedModel } from "../lib/models";
 import { sortPhotos, SortUnavailableError } from "../lib/sortPipeline";
 import { isEbayConfigured, currencySymbol, EBAY_ITEM_BASE_URL } from "../lib/ebay/config";
 import { buildAuthorizeUrl, exchangeCode } from "../lib/ebay/oauth";
+import { fetchActiveComps } from "../lib/ebay/pricing";
 import {
   EBAY_COOKIE,
   EBAY_COOKIE_MAX_AGE,
@@ -440,6 +441,34 @@ api.get("/ebay/callback", async (c) => {
   } catch (e) {
     const msg = encodeURIComponent((e as Error).message);
     return c.redirect(appUrl(c, `/?ebay=error&msg=${msg}`));
+  }
+});
+
+// Real price signal: median/range of comparable ACTIVE eBay listings (Browse
+// API, app token — no seller connection needed). The UI shows this next to
+// Claude's estimate so a price can be grounded in the live market.
+api.post("/ebay/comps", async (c) => {
+  const denied = guardApiRequest(c.req.raw);
+  if (denied) return denied;
+  if (!isEbayConfigured()) {
+    return c.json({ ok: false, error: "eBay isn't configured (no App ID / Cert ID)." }, 400);
+  }
+  let body: { query?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: "Invalid request." }, 400);
+  }
+  const query = (body.query || "").trim();
+  if (!query) return c.json({ ok: false, error: "Nothing to search for." }, 400);
+  try {
+    const comps = await fetchActiveComps(query);
+    if (!comps) {
+      return c.json({ ok: false, error: "No comparable active eBay listings found." }, 404);
+    }
+    return c.json({ ok: true, ...comps });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 502);
   }
 });
 

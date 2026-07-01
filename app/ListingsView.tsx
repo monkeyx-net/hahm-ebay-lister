@@ -12,6 +12,7 @@ interface ListingsViewProps {
   groups: ItemGroup[];
   photoById: (id: string) => Photo | undefined;
   ebayConnected: boolean;
+  ebayConfigured: boolean;
   market: MarketConfig;
   onEdit: (groupId: string, patch: Partial<ListingResult>) => void;
   onRetry: (groupId: string) => void;
@@ -24,6 +25,7 @@ export function ListingsView({
   groups,
   photoById,
   ebayConnected,
+  ebayConfigured,
   market,
   onEdit,
   onRetry,
@@ -84,6 +86,7 @@ export function ListingsView({
             group={group}
             photoById={photoById}
             ebayConnected={ebayConnected}
+            ebayConfigured={ebayConfigured}
             market={market}
             onEdit={onEdit}
             onRetry={onRetry}

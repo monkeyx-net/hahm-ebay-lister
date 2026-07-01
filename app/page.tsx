@@ -81,6 +81,7 @@ export default function Home() {
   const [sorting, setSorting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ebayConnected, setEbayConnected] = useState(false);
+  const [ebayConfigured, setEbayConfigured] = useState(false);
   const [market, setMarket] = useState<MarketConfig>(DEFAULT_MARKET);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -104,6 +105,7 @@ export default function Home() {
         .then((r) => r.json())
         .then((d) => {
           setEbayConnected(Boolean(d.connected));
+          setEbayConfigured(Boolean(d.configured));
           setMarket({
             currencySymbol: d.currencySymbol || DEFAULT_MARKET.currencySymbol,
             itemBaseUrl: d.itemBaseUrl || DEFAULT_MARKET.itemBaseUrl,
@@ -556,6 +558,7 @@ export default function Home() {
           groups={usableGroups}
           photoById={photoById}
           ebayConnected={ebayConnected}
+          ebayConfigured={ebayConfigured}
           market={market}
           onEdit={editListing}
           onRetry={writeGroup}
