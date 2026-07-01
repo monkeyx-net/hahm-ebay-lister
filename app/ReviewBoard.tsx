@@ -9,7 +9,7 @@ interface ReviewBoardProps {
   onRename: (groupId: string, name: string) => void;
   onRenameSku: (groupId: string, sku: string) => void;
   onMovePhoto: (photoId: string, toGroupId: string | "orphans") => void;
-  onReorderPhoto: (groupId: string, photoId: string, toIndex: number) => void;
+  onReorderPhoto: (groupId: string, photoId: string, targetId: string) => void;
   onDeleteGroup: (groupId: string) => void;
   onAddGroup: () => void;
   onWriteAll: () => void;
@@ -111,11 +111,8 @@ function Thumb({
       return;
     }
 
-    const group = groups.find((g) => g.id === groupId);
-    if (!group) return;
-    const targetIndex = group.photoIds.indexOf(photoId);
-    if (targetIndex === -1) return;
-    onReorderPhoto(groupId, draggedId, targetIndex);
+    // photoId is the drop-target thumb; insert the dragged photo before it.
+    onReorderPhoto(groupId, draggedId, photoId);
   };
 
   return (

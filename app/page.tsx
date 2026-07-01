@@ -244,12 +244,13 @@ export default function Home() {
     });
   };
 
-  const reorderPhoto = (groupId: string, photoId: string, toIndex: number) =>
+  const reorderPhoto = (groupId: string, photoId: string, targetId: string) =>
     setGroups((prev) =>
       prev.map((g) => {
         if (g.id !== groupId) return g;
         const ids = g.photoIds.filter((id) => id !== photoId);
-        ids.splice(Math.min(toIndex, ids.length), 0, photoId);
+        const idx = ids.indexOf(targetId);
+        ids.splice(idx === -1 ? ids.length : idx, 0, photoId);
         return { ...g, photoIds: ids };
       })
     );
