@@ -436,9 +436,39 @@ function errorIds(r: EbayResp): number[] {
   }
 }
 
+// eBay's Inventory API intermittently fails with 25001 ("A system error has
+// occurred. Core Inventory Service internal error") or a bare 5xx. These are
+// eBay-side blips that normally succeed on retry (issue #16), so every write
+// call gets a short backoff-and-retry before we surface the failure.
+const TRANSIENT_RETRIES = 2;
+const TRANSIENT_BASE_DELAY_MS = 1500;
+
+function isTransientEbayError(r: EbayResp): boolean {
+  return r.status >= 500 || errorIds(r).includes(25001);
+}
+
+async function withTransientRetry(
+  call: () => Promise<EbayResp>,
+  label: string,
+  sku: string
+): Promise<EbayResp> {
+  let r = await call();
+  for (let attempt = 1; attempt <= TRANSIENT_RETRIES && isTransientEbayError(r); attempt++) {
+    console.warn(
+      `[ebay/publish] sku=${sku} ${label} hit transient eBay error ` +
+        `(status=${r.status} ids=${errorIds(r).join(",") || "none"}) — retry ${attempt}/${TRANSIENT_RETRIES}`
+    );
+    await new Promise((res) => setTimeout(res, TRANSIENT_BASE_DELAY_MS * 2 ** (attempt - 1)));
+    r = await call();
+  }
+  return r;
+}
+
 // Extra guidance for eBay errors that a seller can act on directly. Keyed by
 // errorId; appended to the raw eBay message when surfaced in the UI.
 const EBAY_ERROR_HINTS: Record<number, string> = {
+  25001:
+    "This is a temporary glitch on eBay's side (we already retried automatically). Wait a minute and hit Post again — the listing data itself is fine.",
   25019:
     "eBay rejected the listing's content — usually a restricted or trademarked word in the title/description, or the item is already listed. Edit the title/description and try again.",
 };
@@ -798,10 +828,15 @@ export async function publishListing(
   };
 
   const putInventory = () =>
-    ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
-      body: inventoryItem,
-      extraHeaders: CL,
-    });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
+          body: inventoryItem,
+          extraHeaders: CL,
+        }),
+      "inventory item",
+      sku
+    );
 
   let r = await putInventory();
   if (![200, 201, 204].includes(r.status)) {
@@ -855,7 +890,15 @@ export async function publishListing(
   };
 
   const postOffer = () =>
-    ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer`, { body: offerBody, extraHeaders: CL });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer`, {
+          body: offerBody,
+          extraHeaders: CL,
+        }),
+      "offer creation",
+      sku
+    );
 
   r = await postOffer();
 
@@ -888,10 +931,15 @@ export async function publishListing(
       return { success: false, sku, error: publishErrorMessage("Offer creation failed", r) };
     }
     // Update the pre-existing offer instead.
-    const upd = await ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/offer/${existing}`, {
-      body: updateOfferBody(offerBody),
-      extraHeaders: CL,
-    });
+    const upd = await withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/offer/${existing}`, {
+          body: updateOfferBody(offerBody),
+          extraHeaders: CL,
+        }),
+      "offer update",
+      sku
+    );
     if (![200, 201, 204].includes(upd.status)) {
       logPublishFailure("offer update", sku, upd);
       return { success: false, sku, error: publishErrorMessage("Offer update failed", upd) };
@@ -934,14 +982,24 @@ async function publishOfferWithRecovery(
 ): Promise<PublishResult> {
   const { sku, offerId } = ctx;
   const doPublish = () =>
-    ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer/${offerId}/publish`, {
-      extraHeaders: CL,
-    });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer/${offerId}/publish`, {
+          extraHeaders: CL,
+        }),
+      "publish",
+      sku
+    );
   const putInventory = () =>
-    ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
-      body: ctx.inventoryItem,
-      extraHeaders: CL,
-    });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
+          body: ctx.inventoryItem,
+          extraHeaders: CL,
+        }),
+      "inventory item",
+      sku
+    );
 
   let r = await doPublish();
   if (r.ok) return { success: true, sku, offerId, listingId: r.json?.listingId || "" };
