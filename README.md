@@ -209,9 +209,10 @@ asks eBay's **Taxonomy API** for the correct leaf category for the active tree
 **offline fallback** for the rare case where that lookup is unavailable.
 
 Those fallback tables ship seeded with **US** IDs. To regenerate them for your
-marketplace (e.g. UK), run the generator — it resolves every category against
-eBay's Taxonomy API for whatever tree you're configured for and prints a
-ready-to-paste block:
+marketplace (e.g. UK), run the generator script
+(`scripts/refresh-category-map.ts`, aliased as `npm run refresh:categories`) —
+it resolves every category against eBay's Taxonomy API for whatever tree you're
+configured for and prints a ready-to-paste block:
 
 ```bash
 EBAY_CLIENT_ID=...      \

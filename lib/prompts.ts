@@ -1,6 +1,8 @@
 // Listing-analysis prompts ported verbatim from ebay_lister_v2_robust.py so the
 // web app writes listings exactly the way the original script did.
 
+import { EBAY_LOCALE } from "./ebay/config";
+
 export const ITEM_PROFILES = [
   "auto",
   "clothing",
@@ -203,10 +205,30 @@ For item_specifics: Only include fields relevant to this item. Leave any field b
 For category/category_hint: The broad category can be approximate, but the category_hint should help eBay find the exact leaf category for whatever type of item this is.
 For all item types: include as many accurate specifics as the photos support, even for non-clothing items such as collectibles, media, home decor, toys, tools, sporting goods, art, kitchenware, and electronics accessories.`;
 
+// Instruct the model which spelling variant to use for buyer-facing text, based
+// on the configured marketplace locale. American English is the model default,
+// so en-US needs no directive — but eBay UK/AU buyers expect British spelling.
+export function languageDirective(locale: string = EBAY_LOCALE): string {
+  const l = locale.toLowerCase();
+  if (l.startsWith("en-gb") || l.startsWith("en-au")) {
+    return (
+      "\n\nLANGUAGE: Write ALL customer-facing text (title, description, " +
+      "condition_notes, item_type, key_features, seo_keywords, and every " +
+      "item_specifics value) in British English spelling — e.g. colour, " +
+      "organise, jewellery, grey, metre, centre, catalogue, labelled. Do NOT " +
+      "use American spellings."
+    );
+  }
+  if (l.startsWith("en")) {
+    return ""; // American English is the model default; no directive needed
+  }
+  return `\n\nLANGUAGE: Write all customer-facing text in the language of the ${locale} marketplace.`;
+}
+
 export function buildProfiledAnalysisPrompt(profile: string): string {
   const normalized = normalizeItemProfile(profile);
   const addon = PROFILE_PROMPT_ADDONS[normalized] ?? "";
-  return ANALYSIS_PROMPT + addon;
+  return ANALYSIS_PROMPT + addon + languageDirective();
 }
 
 // ── Sorting prompts (ported from sort_photos in the Python script) ──────────
