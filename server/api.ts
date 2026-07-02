@@ -2,6 +2,7 @@
 // Each handler is plain Hono: it reads a Web Request and returns a Web Response,
 // reusing the framework-neutral helpers in lib/.
 
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -29,7 +30,7 @@ import {
   openConnection,
   sealConnection,
 } from "../lib/ebay/session";
-import { fetchAccountSetup, publishListing } from "../lib/ebay/publish";
+import { fetchAccountSetup, publishListing, clearAccountSetupCache } from "../lib/ebay/publish";
 import type { PublishInput } from "../lib/ebay/publish";
 import type { AnalyzeRequestBody, ListingResult, ModelOption, ModelsPayload } from "../lib/types";
 
@@ -508,6 +509,8 @@ api.post("/ebay/disconnect", (c) => {
   const denied = guardApiRequest(c.req.raw);
   if (denied) return denied;
   deleteCookie(c, EBAY_COOKIE, { path: "/" });
+  // Drop any cached business policies / location so a reconnect re-fetches them.
+  clearAccountSetupCache();
   return c.json({ ok: true });
 });
 
@@ -528,9 +531,10 @@ api.post("/ebay/publish", async (c) => {
   }
 
   // Mint a fresh access token from the encrypted connection cookie.
+  const ebayCookie = getCookie(c, EBAY_COOKIE);
   let accessToken: string | null;
   try {
-    accessToken = await accessTokenFromCookie(getCookie(c, EBAY_COOKIE));
+    accessToken = await accessTokenFromCookie(ebayCookie);
   } catch (e) {
     return c.json({ success: false, error: (e as Error).message }, 500);
   }
@@ -542,7 +546,10 @@ api.post("/ebay/publish", async (c) => {
   }
 
   try {
-    const setup = await fetchAccountSetup(accessToken);
+    // Cache account setup per connection (not globally) so cached policy/location
+    // IDs can never leak across sellers. The sealed cookie identifies the seller.
+    const connKey = createHash("sha256").update(ebayCookie ?? "").digest("hex").slice(0, 16);
+    const setup = await fetchAccountSetup(accessToken, connKey);
     const result = await publishListing(accessToken, setup, body);
     return c.json(result, result.success ? 200 : 502);
   } catch (e) {

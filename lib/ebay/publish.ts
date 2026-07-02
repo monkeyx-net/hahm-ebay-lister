@@ -20,6 +20,7 @@ import {
   type AspectMeta,
 } from "./taxonomy";
 import type { ListingResult } from "../types";
+import { mapLimit } from "../concurrency";
 
 // ── Constants (from the Python script) ───────────────────────────────────────
 
@@ -543,19 +544,52 @@ function pickFirstPolicy(r: EbayResp, listKey: string, idField: string): string 
   return list.length ? String(list[0][idField] || "") : "";
 }
 
-export async function fetchAccountSetup(accessToken: string): Promise<AccountSetup> {
+// Business policies + inventory location are account-stable — they don't change
+// between listings — yet every publish used to re-fetch them (~4-5 eBay API
+// calls). Cache the fully-resolved setup per connection for a short window so a
+// batch of posts hits these endpoints once, not once per item. Keyed by a
+// caller-supplied connection id (see the /ebay/publish route) so IDs can never
+// leak across sellers; cleared on disconnect via clearAccountSetupCache().
+const ACCOUNT_SETUP_TTL_MS = 10 * 60 * 1000;
+const accountSetupCache = new Map<string, { value: AccountSetup; expiresAt: number }>();
+
+export function clearAccountSetupCache(): void {
+  accountSetupCache.clear();
+}
+
+export async function fetchAccountSetup(
+  accessToken: string,
+  connKey: string
+): Promise<AccountSetup> {
+  const now = Date.now();
+  const cached = accountSetupCache.get(connKey);
+  if (cached && cached.expiresAt > now) return cached.value;
+
   const mp = `marketplace_id=${EBAY_MARKETPLACE_ID}`;
   const [ful, pay, ret] = await Promise.all([
     ebayRequest(accessToken, "GET", `${EBAY_ACC_BASE}/fulfillment_policy?${mp}`),
     ebayRequest(accessToken, "GET", `${EBAY_ACC_BASE}/payment_policy?${mp}`),
     ebayRequest(accessToken, "GET", `${EBAY_ACC_BASE}/return_policy?${mp}`),
   ]);
-  return {
+  const setup: AccountSetup = {
     fulfillmentPolicyId: pickFirstPolicy(ful, "fulfillmentPolicies", "fulfillmentPolicyId"),
     paymentPolicyId: pickFirstPolicy(pay, "paymentPolicies", "paymentPolicyId"),
     returnPolicyId: pickFirstPolicy(ret, "returnPolicies", "returnPolicyId"),
     locationKey: await fetchOrCreateLocation(accessToken),
   };
+
+  // Only cache a fully-resolved setup. A missing policy becomes a friendly
+  // "set up your business policies" error in publishListing — don't cache that,
+  // so the next publish after the seller fixes their account picks it up at once.
+  if (
+    setup.fulfillmentPolicyId &&
+    setup.paymentPolicyId &&
+    setup.returnPolicyId &&
+    setup.locationKey
+  ) {
+    accountSetupCache.set(connKey, { value: setup, expiresAt: now + ACCOUNT_SETUP_TTL_MS });
+  }
+  return setup;
 }
 
 async function fetchOrCreateLocation(accessToken: string): Promise<string> {
@@ -629,12 +663,12 @@ export async function publishListing(
     };
   }
 
-  // 1. Upload photos → EPS URLs.
-  const photoUrls: string[] = [];
-  for (const img of input.images.slice(0, 12)) {
-    const url = await uploadPhoto(accessToken, img.data, img.mediaType, `${sku}.jpg`);
-    if (url) photoUrls.push(url);
-  }
+  // 1. Upload photos → EPS URLs. Run a few in parallel (order-preserving, so the
+  // first photo stays the gallery thumbnail). eBay caps a listing at 12 images.
+  const uploaded = await mapLimit(input.images.slice(0, 12), 4, (img) =>
+    uploadPhoto(accessToken, img.data, img.mediaType, `${sku}.jpg`)
+  );
+  const photoUrls = uploaded.filter((u): u is string => Boolean(u));
   if (photoUrls.length === 0) {
     return { success: false, sku, error: "Could not upload any photos to eBay." };
   }

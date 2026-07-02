@@ -18,7 +18,7 @@ import crypto from "crypto";
  */
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
+const RATE_LIMIT_MAX_REQUESTS = 40;
 
 // Per-process limiter. Not a global guarantee behind multiple replicas, but it
 // blunts burst abuse at zero infra cost.
@@ -63,7 +63,7 @@ export function rateLimitRequest(req: Request): Response | null {
   if (rateLimited(clientIp(req))) {
     return jsonResponse(
       { ok: false, error: "Too many requests — wait a minute and try again." },
-      429
+      429,
     );
   }
   return null;
@@ -86,7 +86,7 @@ export function guardApiRequest(req: Request): Response | null {
           error:
             "This deployment has no APP_SECRET configured. Set it in your environment variables (or Coolify → Environment), then redeploy.",
         },
-        503
+        503,
       );
     }
     return null; // local development only
@@ -95,8 +95,12 @@ export function guardApiRequest(req: Request): Response | null {
   const provided = req.headers.get("x-app-secret") ?? "";
   if (!provided || !timingSafeEqual(provided, secret)) {
     return jsonResponse(
-      { ok: false, code: "ACCESS_CODE_REQUIRED", error: "Access code required." },
-      401
+      {
+        ok: false,
+        code: "ACCESS_CODE_REQUIRED",
+        error: "Access code required.",
+      },
+      401,
     );
   }
 
@@ -107,7 +111,7 @@ export function guardApiRequest(req: Request): Response | null {
 export function safeErrorResponse(
   context: string,
   e: unknown,
-  fallback: string
+  fallback: string,
 ): Response {
   console.error(`[${context}]`, e);
   return jsonResponse({ ok: false, error: fallback }, 500);

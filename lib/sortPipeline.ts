@@ -7,6 +7,7 @@ import {
   slugifyFolderName,
 } from "./prompts";
 import { labeledContent, toImageBlock, type WireImage } from "./images";
+import { mapLimit } from "./concurrency";
 
 const GROUP_MODEL = "claude-sonnet-4-6";
 const CHECK_MODEL = "claude-sonnet-4-6";
@@ -46,23 +47,6 @@ function firstText(resp: Anthropic.Message): string {
   return block && block.type === "text" ? block.text.trim() : "";
 }
 
-// Run an async fn over items with a fixed concurrency cap, preserving order.
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const i = cursor++;
-      results[i] = await fn(items[i], i);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 // Call Claude and parse JSON, retrying transient/rate-limit errors with backoff.
 async function claudeJson<T>(
