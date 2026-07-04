@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ItemGroup, ListingResult, MarketConfig, Photo } from "@/lib/types";
 import { apiPost } from "@/lib/api-client";
+import { SIZE_REQUIRED_CATEGORIES } from "@/lib/categories";
 
 const TITLE_LIMIT = 80;
 
@@ -23,8 +24,11 @@ function formatPrice(value: ListingResult["suggested_price"], symbol: string): s
 }
 
 function priceToInput(value: ListingResult["suggested_price"]): string {
-  const n = typeof value === "string" ? parseFloat(value) : value;
-  return n === undefined || Number.isNaN(n) ? "" : String(n);
+  if (value === undefined) return "";
+  // Preserve the raw text the user is typing (e.g. "9.50" or a trailing ".")
+  // — normalizing it back through a number would strip trailing zeros mid-edit.
+  if (typeof value === "string") return value;
+  return Number.isNaN(value) ? "" : String(value);
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -123,6 +127,11 @@ export function ListingCard({
 
   const titleLen = listing?.title?.length ?? 0;
 
+  // eBay's size standardization blocks apparel/footwear listings that are
+  // missing a Size, so flag those for the seller before they post.
+  const sizeRequired = SIZE_REQUIRED_CATEGORIES.has(listing?.category ?? "");
+  const sizeMissing = sizeRequired && !(listing?.size ?? "").trim();
+
   return (
     <article className={`listing-card status-${group.status}`}>
       <header className="listing-card-head" onClick={() => setOpen((o) => !o)}>
@@ -205,10 +214,9 @@ export function ListingCard({
                   inputMode="decimal"
                   value={priceToInput(listing.suggested_price)}
                   onChange={(e) =>
-                    onEdit(group.id, {
-                      suggested_price:
-                        e.target.value === "" ? "" : Number(e.target.value),
-                    })
+                    // Keep the raw string so in-progress values like "9.50"
+                    // survive; consumers (export, publish) parse it as needed.
+                    onEdit(group.id, { suggested_price: e.target.value })
                   }
                 />
               </div>
@@ -287,13 +295,30 @@ export function ListingCard({
                 <div className="v">{listing.brand}</div>
               </div>
             )}
-            {listing.size && (
-              <div className="stat">
-                <div className="k">Size</div>
-                <div className="v">{listing.size}</div>
+            {(sizeRequired || listing.size) && (
+              <div className={`stat editable${sizeMissing ? " needs-attention" : ""}`}>
+                <label className="k" htmlFor={`size-${group.id}`}>
+                  Size
+                </label>
+                <input
+                  id={`size-${group.id}`}
+                  type="text"
+                  className="size-input"
+                  value={listing.size ?? ""}
+                  placeholder={sizeRequired ? "e.g. M, 32x34, 10.5" : "—"}
+                  onChange={(e) => onEdit(group.id, { size: e.target.value })}
+                />
               </div>
             )}
           </div>
+
+          {sizeMissing && (
+            <p className="size-warning" role="alert">
+              ⚠️ No size found on the tag. eBay now blocks apparel listings
+              without a standard size — check the photos or measure the item,
+              then fill in Size above before posting.
+            </p>
+          )}
 
           <div className="result-field">
             <label>Description</label>

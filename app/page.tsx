@@ -404,6 +404,27 @@ export default function Home() {
     [groups]
   );
 
+  // Clear the whole batch and return to the upload screen to start fresh.
+  // Photos hold base64 data URLs (not object URLs), so dropping the state is
+  // all the cleanup needed. Confirm first since it discards the current batch.
+  const startNew = () => {
+    if (
+      groups.length > 0 &&
+      !window.confirm(
+        "Start a new listing? This clears the current photos and listings."
+      )
+    ) {
+      return;
+    }
+    setPhotos([]);
+    setGroups([]);
+    setOrphanIds([]);
+    setBinPrefix("");
+    setError(null);
+    setStep("upload");
+    window.scrollTo({ top: 0 });
+  };
+
   return (
     <main className="wrap">
       <header className="masthead">
@@ -577,6 +598,7 @@ export default function Home() {
           onPost={postGroup}
           onPostAll={postAll}
           onBack={() => setStep("review")}
+          onStartNew={startNew}
         />
       )}
 

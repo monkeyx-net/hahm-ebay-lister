@@ -21,6 +21,7 @@ import {
 } from "./taxonomy";
 import type { ListingResult } from "../types";
 import { mapLimit } from "../concurrency";
+import { APPAREL_CATEGORIES, PANTS_CATEGORIES } from "../categories";
 
 // ── Constants (from the Python script) ───────────────────────────────────────
 
@@ -130,25 +131,32 @@ const APPAREL_CONDITION_ID_PREFERENCES: Record<string, number[]> = {
 const GENERAL_SAFE_CONDITION_IDS = [3000, 4000, 5000, 6000, 2750, 1500, 1000, 1750, 7000];
 const APPAREL_SAFE_CONDITION_IDS = [3000, 2990, 3010, 1500, 1000, 1750];
 
-const APPAREL_CATEGORIES = new Set([
-  "womens_top", "womens_dress", "womens_skirt", "womens_pants", "womens_coat",
-  "womens_sweater", "womens_jeans", "womens_clothing", "womens_shoes", "mens_top",
-  "mens_pants", "mens_coat", "mens_sweater", "mens_jeans", "mens_clothing",
-  "mens_shoes", "scarf", "belt", "hat",
-]);
-const PANTS_CATEGORIES = new Set([
-  "womens_pants", "womens_jeans", "womens_skirt", "mens_pants", "mens_jeans",
-]);
-
 const ASPECT_DEFAULTS: Record<string, string> = {
   "Skirt Length": "Knee-Length", "Dress Length": "Knee-Length", Rise: "Mid Rise",
   "Leg Style": "Straight", Closure: "Pull-On", "Shoe Width": "Medium",
   "Heel Height": "Flat", "Toe Shape": "Round", Adjustable: "Yes",
   "Exterior Pockets": "Yes", Lining: "Lined", Hood: "No Hood", "Bag Closure": "Zip",
   "Strap Type": "Adjustable", "Hat Style": "Baseball Cap", "Brim Style": "Curved Bill",
-  "Size Type": "Regular", Size: "Regular", Style: "Casual", Department: "Unisex Adult",
+  "Size Type": "Regular", Style: "Casual", Department: "Unisex Adult",
   Type: "Item", Brand: "Unbranded", Color: "Multicolor", Material: "Mixed Materials",
 };
+
+// eBay's size standardization (enforced July 2026) blocks or holds listings
+// whose Size is a placeholder or non-standard value, so size aspects are only
+// ever filled from real listing data — never from defaults or guesses.
+// "Size Type" (Regular/Plus/Petite/…) is exempt: it's a fit class, not a size.
+function isSizeAspect(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.includes("size") && !n.includes("size type");
+}
+
+const PLACEHOLDER_SIZE_RE =
+  /^(see\s|refer\s|check\s|unknown\b|n\/?a\b|none\b|not\s|no\s(size|tag)|[-?]+$|tbd\b)/i;
+
+function cleanSize(raw: unknown): string {
+  const s = String(raw || "").trim();
+  return PLACEHOLDER_SIZE_RE.test(s) ? "" : s;
+}
 
 // ── eBay REST client (token-authed) ──────────────────────────────────────────
 
@@ -190,11 +198,13 @@ async function ebayRequest(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function computeBufferedPrice(raw: number | string | undefined): number {
-  let base = typeof raw === "string" ? parseFloat(raw) : raw ?? 0;
-  if (!base || Number.isNaN(base) || base <= 0) base = 29.99;
-  const buffered = Math.max(base * 1.18, base + 5);
-  return Math.round(buffered * 100) / 100;
+// Use the seller's entered price verbatim. eBay rejects a zero/invalid price,
+// so fall back to a sane default only when nothing usable was provided — never
+// silently mark up the price the seller set.
+function computeOfferPrice(raw: number | string | undefined): number {
+  const base = typeof raw === "string" ? parseFloat(raw) : raw ?? 0;
+  if (!base || Number.isNaN(base) || base <= 0) return 29.99;
+  return Math.round(base * 100) / 100;
 }
 
 // eBay's CALCULATED-shipping business policies REQUIRE package weight (and
@@ -327,7 +337,7 @@ function buildAspects(listing: ListingResult, catKey: string): Record<string, st
   };
 
   put("Brand", String(listing.brand || "").trim());
-  put("Size", String(listing.size || "").trim());
+  put("Size", cleanSize(listing.size));
   put("Color", singleValue(listing.color));
   put("Material", singleValue(listing.material));
   put("Type", String(listing.item_type || "").trim());
@@ -402,7 +412,7 @@ function freeTextDefault(name: string, listing: ListingResult): string {
   const n = name.toLowerCase();
   if (n.includes("brand")) return String(listing.brand || "").trim() || "Unbranded";
   if (n.includes("color")) return singleValue(listing.color) || "Multicolor";
-  if (n.includes("shoe size") || n === "size") return String(listing.size || "").trim();
+  if (n.includes("shoe size") || n === "size") return cleanSize(listing.size);
   if (n.includes("material")) return singleValue(listing.material) || "Man Made";
   if (n.includes("style")) return String(listing.item_specifics?.Style || listing.item_type || "").trim();
   if (n.includes("type")) return String(listing.item_type || "").trim();
@@ -422,16 +432,24 @@ function reconcileAspects(
 
     if (a.mode === "SELECTION_ONLY") {
       // Must be one of eBay's allowed values, or the publish 25002-fails.
+      // Size aspects never fall back to a guessed value — a wrong size
+      // mislabels the item and trips eBay's standardization enforcement.
       const canonical =
         matchAllowed(current || "", a.values) ||
-        matchAllowed(ASPECT_DEFAULTS[a.name] || "", a.values) ||
-        (a.name === "Department" ? pickDepartment(a.values, listing, catKey) : "") ||
-        a.values[0] ||
-        "";
+        (isSizeAspect(a.name)
+          ? ""
+          : matchAllowed(ASPECT_DEFAULTS[a.name] || "", a.values) ||
+            (a.name === "Department" ? pickDepartment(a.values, listing, catKey) : "") ||
+            a.values[0] ||
+            "");
       if (canonical) aspects[a.name] = [canonical];
+      else if (isSizeAspect(a.name)) delete aspects[a.name];
     } else if (!current) {
       // FREE_TEXT and unset — fill from the listing or a sensible default.
-      const v = freeTextDefault(a.name, listing) || ASPECT_DEFAULTS[a.name] || a.values[0] || "";
+      const fromListing = freeTextDefault(a.name, listing);
+      const v =
+        fromListing ||
+        (isSizeAspect(a.name) ? "" : ASPECT_DEFAULTS[a.name] || a.values[0] || "");
       const clipped = clipAspectValue(v);
       if (clipped) aspects[a.name] = [clipped];
     }
@@ -446,6 +464,76 @@ function errorIds(r: EbayResp): number[] {
   } catch {
     return [];
   }
+}
+
+// eBay's Inventory API intermittently fails with 25001 ("A system error has
+// occurred. Core Inventory Service internal error") or a bare 5xx. These are
+// eBay-side blips that normally succeed on retry (issue #16), so every write
+// call gets a short backoff-and-retry before we surface the failure.
+const TRANSIENT_RETRIES = 2;
+const TRANSIENT_BASE_DELAY_MS = 1500;
+
+function isTransientEbayError(r: EbayResp): boolean {
+  return r.status >= 500 || errorIds(r).includes(25001);
+}
+
+async function withTransientRetry(
+  call: () => Promise<EbayResp>,
+  label: string,
+  sku: string
+): Promise<EbayResp> {
+  let r = await call();
+  for (let attempt = 1; attempt <= TRANSIENT_RETRIES && isTransientEbayError(r); attempt++) {
+    console.warn(
+      `[ebay/publish] sku=${sku} ${label} hit transient eBay error ` +
+        `(status=${r.status} ids=${errorIds(r).join(",") || "none"}) — retry ${attempt}/${TRANSIENT_RETRIES}`
+    );
+    await new Promise((res) => setTimeout(res, TRANSIENT_BASE_DELAY_MS * 2 ** (attempt - 1)));
+    r = await call();
+  }
+  return r;
+}
+
+// Extra guidance for eBay errors that a seller can act on directly. Keyed by
+// errorId; appended to the raw eBay message when surfaced in the UI.
+const EBAY_ERROR_HINTS: Record<number, string> = {
+  25001:
+    "This is a temporary glitch on eBay's side (we already retried automatically). Wait a minute and hit Post again — the listing data itself is fine.",
+  25019:
+    "eBay rejected the listing's content — usually a restricted or trademarked word in the title/description, or the item is already listed. Edit the title/description and try again.",
+};
+
+// Pull eBay's primary error (id + human message) from a failed response, so we
+// can log it and show it cleanly instead of dumping raw JSON at the user.
+function primaryEbayError(r: EbayResp): { errorId: number; message: string } {
+  const err = r.json?.errors?.[0];
+  if (err) {
+    return {
+      errorId: Number(err.errorId || 0),
+      message: String(err.longMessage || err.message || "").trim(),
+    };
+  }
+  return { errorId: 0, message: (r.text || "").slice(0, 300) };
+}
+
+// One structured log line per publish failure, so the server logs actually show
+// what eBay rejected. Without this the whole path logged nothing, which is why
+// failed requests showed "No logs found for this request".
+function logPublishFailure(stage: string, sku: string, r: EbayResp): void {
+  const { errorId, message } = primaryEbayError(r);
+  console.error(
+    `[ebay/publish] ${stage} failed sku=${sku} http=${r.status} errorId=${errorId || "?"} ${message}`
+  );
+}
+
+// User-facing one-liner: eBay's own reason, tagged with its errorId, plus an
+// actionable hint when we have one.
+function publishErrorMessage(stage: string, r: EbayResp): string {
+  const { errorId, message } = primaryEbayError(r);
+  const detail = message || `HTTP ${r.status}`;
+  const head = errorId ? `${stage} (eBay error ${errorId}): ${detail}` : `${stage} (${r.status}): ${detail}`;
+  const hint = errorId ? EBAY_ERROR_HINTS[errorId] : undefined;
+  return hint ? `${head} ${hint}` : head;
 }
 
 function extractExistingOfferId(r: EbayResp): string | null {
@@ -482,6 +570,9 @@ function addMissingAspects(
 ): string[] {
   const added: string[] = [];
   for (const field of missing) {
+    // Never stamp a default into a size aspect — let eBay's "missing item
+    // specific" error surface so the seller supplies the real size.
+    if (isSizeAspect(field)) continue;
     const def = ASPECT_DEFAULTS[field] || "Unbranded";
     aspects[field] = [def];
     added.push(`${field}=${def}`);
@@ -706,10 +797,15 @@ export async function publishListing(
   };
 
   const putInventory = () =>
-    ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
-      body: inventoryItem,
-      extraHeaders: CL,
-    });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
+          body: inventoryItem,
+          extraHeaders: CL,
+        }),
+      "inventory item",
+      sku
+    );
 
   let r = await putInventory();
   if (![200, 201, 204].includes(r.status)) {
@@ -726,6 +822,11 @@ export async function publishListing(
     ) {
       for (const alt of condCandidates) {
         if (alt === inventoryItem.condition) continue;
+        // Loud on purpose: a silent step-down is how "Excellent" items ended
+        // up displaying as "Pre-owned – Good" with no trace in the logs.
+        console.warn(
+          `[ebay/publish] sku=${sku} condition ${inventoryItem.condition} rejected by category ${catId} — trying ${alt}`
+        );
         inventoryItem.condition = alt;
         r = await putInventory();
         if ([200, 201, 204].includes(r.status)) break;
@@ -733,12 +834,13 @@ export async function publishListing(
       }
     }
     if (![200, 201, 204].includes(r.status)) {
-      return { success: false, sku, error: `Inventory item failed (${r.status}): ${r.text.slice(0, 300)}` };
+      logPublishFailure("inventory item", sku, r);
+      return { success: false, sku, error: publishErrorMessage("Inventory item failed", r) };
     }
   }
 
   // 3. Offer.
-  const price = computeBufferedPrice(listing.suggested_price);
+  const price = computeOfferPrice(listing.suggested_price);
   const offerBody: any = {
     sku,
     marketplaceId: EBAY_MARKETPLACE_ID,
@@ -757,7 +859,15 @@ export async function publishListing(
   };
 
   const postOffer = () =>
-    ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer`, { body: offerBody, extraHeaders: CL });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer`, {
+          body: offerBody,
+          extraHeaders: CL,
+        }),
+      "offer creation",
+      sku
+    );
 
   r = await postOffer();
 
@@ -786,19 +896,27 @@ export async function publishListing(
   if (r.status === 400) {
     const existing = extractExistingOfferId(r);
     if (!existing) {
-      return { success: false, sku, error: `Offer creation failed (${r.status}): ${r.text.slice(0, 300)}` };
+      logPublishFailure("offer creation", sku, r);
+      return { success: false, sku, error: publishErrorMessage("Offer creation failed", r) };
     }
     // Update the pre-existing offer instead.
-    const upd = await ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/offer/${existing}`, {
-      body: updateOfferBody(offerBody),
-      extraHeaders: CL,
-    });
+    const upd = await withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/offer/${existing}`, {
+          body: updateOfferBody(offerBody),
+          extraHeaders: CL,
+        }),
+      "offer update",
+      sku
+    );
     if (![200, 201, 204].includes(upd.status)) {
-      return { success: false, sku, error: `Offer update failed (${upd.status}): ${upd.text.slice(0, 300)}` };
+      logPublishFailure("offer update", sku, upd);
+      return { success: false, sku, error: publishErrorMessage("Offer update failed", upd) };
     }
     offerId = existing;
   } else if (![200, 201].includes(r.status)) {
-    return { success: false, sku, error: `Offer creation failed (${r.status}): ${r.text.slice(0, 300)}` };
+    logPublishFailure("offer creation", sku, r);
+    return { success: false, sku, error: publishErrorMessage("Offer creation failed", r) };
   } else {
     offerId = r.json?.offerId || "";
   }
@@ -833,14 +951,24 @@ async function publishOfferWithRecovery(
 ): Promise<PublishResult> {
   const { sku, offerId } = ctx;
   const doPublish = () =>
-    ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer/${offerId}/publish`, {
-      extraHeaders: CL,
-    });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "POST", `${EBAY_INV_BASE}/offer/${offerId}/publish`, {
+          extraHeaders: CL,
+        }),
+      "publish",
+      sku
+    );
   const putInventory = () =>
-    ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
-      body: ctx.inventoryItem,
-      extraHeaders: CL,
-    });
+    withTransientRetry(
+      () =>
+        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/inventory_item/${sku}`, {
+          body: ctx.inventoryItem,
+          extraHeaders: CL,
+        }),
+      "inventory item",
+      sku
+    );
 
   let r = await doPublish();
   if (r.ok) return { success: true, sku, offerId, listingId: r.json?.listingId || "" };
@@ -862,6 +990,9 @@ async function publishOfferWithRecovery(
   if (eids.includes(25059) || eids.includes(25021)) {
     for (const alt of ctx.condCandidates) {
       if (alt === ctx.inventoryItem.condition) continue;
+      console.warn(
+        `[ebay/publish] sku=${sku} condition ${ctx.inventoryItem.condition} rejected at publish (category ${ctx.catId}) — trying ${alt}`
+      );
       ctx.inventoryItem.condition = alt;
       await putInventory();
       r = await doPublish();
@@ -885,10 +1016,11 @@ async function publishOfferWithRecovery(
     }
   }
 
+  logPublishFailure("publish", sku, r);
   return {
     success: false,
     sku,
     offerId,
-    error: `Publish failed (${r.status}): ${r.text.slice(0, 300)}`,
+    error: publishErrorMessage("Publish failed", r),
   };
 }

@@ -551,8 +551,13 @@ api.post("/ebay/publish", async (c) => {
     const connKey = createHash("sha256").update(ebayCookie ?? "").digest("hex").slice(0, 16);
     const setup = await fetchAccountSetup(accessToken, connKey);
     const result = await publishListing(accessToken, setup, body);
-    return c.json(result, result.success ? 200 : 502);
+    // A failed publish is a business outcome (eBay rejected the listing), not a
+    // server error. Return 422 so it can't be confused with a real server/proxy
+    // 5xx (function crash/timeout). The client keys off `success`, not the HTTP
+    // status. True server faults still throw and surface as 500 below.
+    return c.json(result, result.success ? 200 : 422);
   } catch (e) {
+    console.error(`[ebay/publish] unhandled error sku=${body.sku}:`, e);
     return c.json({ success: false, sku: body.sku, error: (e as Error).message }, 500);
   }
 });
