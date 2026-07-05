@@ -5,8 +5,12 @@
 import { XMLParser } from "fast-xml-parser";
 import { EBAY_TRADING, EBAY_SITE_ID } from "./config";
 
-const ARRAY_TAGS = new Set([
-  "Item", // GetMyeBaySelling's ItemArray
+// Tag names alone aren't enough to decide "repeatable" — "Item" means a list
+// entry under GetMyeBaySelling's ActiveList.ItemArray, but the exact same tag
+// name is GetItem's single top-level result (GetItemResponse.Item), which
+// must NOT be forced into a one-element array. Match on the tag's full path
+// instead, scoping "Item" to only the list context.
+const ALWAYS_ARRAY_TAGS = new Set([
   "Variation", // multi-variation listings
   "PictureURL", // GetItem's PictureDetails
   "NameValueList", // GetItem's ItemSpecifics
@@ -18,7 +22,9 @@ const parser = new XMLParser({
   attributeNamePrefix: "@_",
   // Always give callers an array for repeatable elements, so call sites don't
   // have to special-case "one result" vs "many results".
-  isArray: (name) => ARRAY_TAGS.has(name),
+  isArray: (name, jpath) =>
+    ALWAYS_ARRAY_TAGS.has(name) ||
+    (name === "Item" && typeof jpath === "string" && jpath.endsWith("ItemArray.Item")),
 });
 
 export interface TradingApiResult {
