@@ -28,40 +28,26 @@ interface ClassicItemDetails {
   itemSpecifics: { name: string; values: string[] }[];
 }
 
-const GET_ITEM_SELECTORS = [
-  "Item.Title",
-  "Item.Description",
-  "Item.PrimaryCategory.CategoryID",
-  "Item.ConditionID",
-  "Item.Country",
-  "Item.Currency",
-  "Item.PostalCode",
-  "Item.Site",
-  "Item.Quantity",
-  "Item.SellingStatus.CurrentPrice",
-  "Item.SellingStatus.QuantitySold",
-  "Item.ListingDuration",
-  "Item.DispatchTimeMax",
-  "Item.PictureDetails.PictureURL",
-  "Item.ItemSpecifics",
-];
-
 function toArray(v: any): any[] {
   return v == null ? [] : Array.isArray(v) ? v : [v];
 }
 
 // Read the live listing's full content — everything AddFixedPriceItem needs
-// to recreate it as a brand-new listing.
+// to recreate it as a brand-new listing. Unlike GetMyeBaySelling (a bulk
+// "lite" list view that genuinely needs OutputSelector to include fields
+// like StartTime), GetItem already returns the full item record by default —
+// adding an OutputSelector here REPLACES that default with only the named
+// fields, and got every field wrong the first time around. DetailLevel
+// ReturnAll is the belt-and-suspenders way to make sure nothing is trimmed.
 export async function fetchClassicItemDetails(
   accessToken: string,
   itemId: string
 ): Promise<{ details: ClassicItemDetails | null; error?: string }> {
-  const selectors = GET_ITEM_SELECTORS.map((s) => `  <OutputSelector>${s}</OutputSelector>`).join("\n");
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ItemID>${xmlEscape(itemId)}</ItemID>
+  <DetailLevel>ReturnAll</DetailLevel>
   <IncludeItemSpecifics>true</IncludeItemSpecifics>
-${selectors}
 </GetItemRequest>`;
   const result = await callTradingApi(accessToken, "GetItem", xml);
   if (!result.ok) {
@@ -111,6 +97,10 @@ ${selectors}
   if (!details.currency) missing.push("currency");
   if (!details.pictureUrls.length) missing.push("photos");
   if (missing.length) {
+    console.log(
+      `[ebay/classicListing] GetItem itemId=${itemId} incomplete, missing=${missing.join(",")} ` +
+        `raw=${JSON.stringify(item).slice(0, 1500)}`
+    );
     return {
       details: null,
       error: `Missing ${missing.join(", ")} from eBay's item details — can't safely relist this one.`,
