@@ -32,6 +32,8 @@ import {
 } from "../lib/ebay/session";
 import { fetchAccountSetup, publishListing, clearAccountSetupCache } from "../lib/ebay/publish";
 import type { PublishInput } from "../lib/ebay/publish";
+import { fetchActiveListings } from "../lib/ebay/sellerListings";
+import { refreshListing } from "../lib/ebay/refresh";
 import type { AnalyzeRequestBody, ListingResult, ModelOption, ModelsPayload } from "../lib/types";
 
 export const api = new Hono();
@@ -559,5 +561,72 @@ api.post("/ebay/publish", async (c) => {
   } catch (e) {
     console.error(`[ebay/publish] unhandled error sku=${body.sku}:`, e);
     return c.json({ success: false, sku: body.sku, error: (e as Error).message }, 500);
+  }
+});
+
+// Stagnant-listing dashboard: the seller's currently-active listings, with
+// age (via the Trading API — the REST Inventory API has no start-date field).
+api.post("/ebay/listings", async (c) => {
+  const denied = guardApiRequest(c.req.raw);
+  if (denied) return denied;
+
+  let accessToken: string | null;
+  try {
+    accessToken = await accessTokenFromCookie(getCookie(c, EBAY_COOKIE));
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 500);
+  }
+  if (!accessToken) {
+    return c.json(
+      { ok: false, error: "eBay isn't connected. Connect your account and try again." },
+      401
+    );
+  }
+
+  try {
+    const listings = await fetchActiveListings(accessToken);
+    return c.json({ ok: true, listings });
+  } catch (e) {
+    console.error("[ebay/listings]", e);
+    return c.json({ ok: false, error: (e as Error).message }, 500);
+  }
+});
+
+// "End Listing" + "Sell Similar" for one stagnant SKU — withdraws and
+// re-publishes the same offer, which eBay returns as a brand-new listing ID.
+api.post("/ebay/refresh-listing", async (c) => {
+  const denied = guardApiRequest(c.req.raw);
+  if (denied) return denied;
+
+  let sku = "";
+  try {
+    const body = (await c.req.json()) as { sku?: string };
+    sku = String(body.sku ?? "").trim();
+  } catch {
+    /* fall through to validation */
+  }
+  if (!sku) {
+    return c.json({ success: false, error: "Missing SKU." }, 400);
+  }
+
+  let accessToken: string | null;
+  try {
+    accessToken = await accessTokenFromCookie(getCookie(c, EBAY_COOKIE));
+  } catch (e) {
+    return c.json({ success: false, error: (e as Error).message }, 500);
+  }
+  if (!accessToken) {
+    return c.json(
+      { success: false, error: "eBay isn't connected. Connect your account and try again." },
+      401
+    );
+  }
+
+  try {
+    const result = await refreshListing(accessToken, sku);
+    return c.json(result, result.success ? 200 : 422);
+  } catch (e) {
+    console.error(`[ebay/refresh-listing] unhandled error sku=${sku}:`, e);
+    return c.json({ success: false, sku, error: (e as Error).message }, 500);
   }
 });

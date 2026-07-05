@@ -160,14 +160,14 @@ function cleanSize(raw: unknown): string {
 
 // ── eBay REST client (token-authed) ──────────────────────────────────────────
 
-interface EbayResp {
+export interface EbayResp {
   ok: boolean;
   status: number;
   json: any;
   text: string;
 }
 
-async function ebayRequest(
+export async function ebayRequest(
   accessToken: string,
   method: string,
   url: string,
@@ -458,7 +458,7 @@ function reconcileAspects(
 
 // ── eBay error parsing (from the script) ─────────────────────────────────────
 
-function errorIds(r: EbayResp): number[] {
+export function errorIds(r: EbayResp): number[] {
   try {
     return (r.json?.errors || []).map((e: any) => Number(e.errorId || 0));
   } catch {
@@ -477,7 +477,7 @@ function isTransientEbayError(r: EbayResp): boolean {
   return r.status >= 500 || errorIds(r).includes(25001);
 }
 
-async function withTransientRetry(
+export async function withTransientRetry(
   call: () => Promise<EbayResp>,
   label: string,
   sku: string
@@ -505,7 +505,7 @@ const EBAY_ERROR_HINTS: Record<number, string> = {
 
 // Pull eBay's primary error (id + human message) from a failed response, so we
 // can log it and show it cleanly instead of dumping raw JSON at the user.
-function primaryEbayError(r: EbayResp): { errorId: number; message: string } {
+export function primaryEbayError(r: EbayResp): { errorId: number; message: string } {
   const err = r.json?.errors?.[0];
   if (err) {
     return {
@@ -519,7 +519,7 @@ function primaryEbayError(r: EbayResp): { errorId: number; message: string } {
 // One structured log line per publish failure, so the server logs actually show
 // what eBay rejected. Without this the whole path logged nothing, which is why
 // failed requests showed "No logs found for this request".
-function logPublishFailure(stage: string, sku: string, r: EbayResp): void {
+export function logPublishFailure(stage: string, sku: string, r: EbayResp): void {
   const { errorId, message } = primaryEbayError(r);
   console.error(
     `[ebay/publish] ${stage} failed sku=${sku} http=${r.status} errorId=${errorId || "?"} ${message}`
@@ -712,6 +712,32 @@ async function fetchOrCreateLocation(accessToken: string): Promise<string> {
     extraHeaders: { "Content-Language": EBAY_LOCALE },
   });
   return key;
+}
+
+// Find the offer for a SKU regardless of status — used by the "refresh
+// stagnant listing" flow, which needs to find and re-publish an offer that's
+// currently UNPUBLISHED (just withdrawn, or left over from an interrupted
+// earlier refresh attempt), not only a live PUBLISHED one.
+export async function findOfferBySku(
+  accessToken: string,
+  sku: string
+): Promise<{ offerId: string; listingId: string; status: string } | null> {
+  const r = await ebayRequest(
+    accessToken,
+    "GET",
+    `${EBAY_INV_BASE}/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${EBAY_MARKETPLACE_ID}`
+  );
+  if (!r.ok) return null; // 404 = no offers for this SKU
+  const offers = r.json?.offers ?? [];
+  if (!offers.length) return null;
+  // Prefer a PUBLISHED offer if one exists; otherwise take the first (a SKU
+  // only ever has one offer per marketplace in this app's publish flow).
+  const o = offers.find((x: any) => String(x?.status || "").toUpperCase() === "PUBLISHED") ?? offers[0];
+  return {
+    offerId: String(o.offerId || ""),
+    listingId: String(o?.listing?.listingId || ""),
+    status: String(o?.status || "").toUpperCase(),
+  };
 }
 
 // ── The full publish flow for one item ───────────────────────────────────────

@@ -9,6 +9,7 @@ import { EbayConnect } from "./EbayConnect";
 import { ModelSelector } from "./ModelSelector";
 import { ReviewBoard } from "./ReviewBoard";
 import { ListingsView } from "./ListingsView";
+import { ManageListings } from "./ManageListings";
 import type {
   AnalyzeResponse,
   ItemGroup,
@@ -83,6 +84,7 @@ export default function Home() {
   const [ebayConnected, setEbayConnected] = useState(false);
   const [ebayConfigured, setEbayConfigured] = useState(false);
   const [market, setMarket] = useState<MarketConfig>(DEFAULT_MARKET);
+  const [viewingManage, setViewingManage] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const photoMap = useMemo(() => {
@@ -439,6 +441,18 @@ export default function Home() {
 
       <EbayConnect />
 
+      {ebayConnected && !viewingManage && (
+        <div className="manage-listings-entry">
+          <button type="button" className="btn-ghost" onClick={() => setViewingManage(true)}>
+            📦 Manage listings
+          </button>
+        </div>
+      )}
+
+      {viewingManage ? (
+        <ManageListings market={market} onClose={() => setViewingManage(false)} />
+      ) : (
+        <>
       {step === "upload" && (
         <>
           <section className="hero">
@@ -600,6 +614,8 @@ export default function Home() {
           onBack={() => setStep("review")}
           onStartNew={startNew}
         />
+      )}
+        </>
       )}
 
       <p className="footnote">

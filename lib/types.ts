@@ -93,3 +93,27 @@ export interface MarketConfig {
   currencySymbol: string;
   itemBaseUrl: string;
 }
+
+// ── Manage Listings (stagnant-inventory refresh dashboard) ──────────────────
+
+export interface EbayListingSummary {
+  itemId: string;
+  sku: string;
+  title: string;
+  price: number;
+  currency: string;
+  galleryUrl?: string;
+  startTime: string; // ISO string from eBay
+  ageDays: number;
+  quantity: number;
+  quantitySold: number;
+}
+
+export interface RefreshListingResult {
+  success: boolean;
+  sku: string;
+  offerId?: string;
+  oldListingId?: string;
+  newListingId?: string;
+  error?: string;
+}
