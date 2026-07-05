@@ -17,8 +17,7 @@ interface Row extends EbayListingSummary {
   newListingId?: string;
 }
 
-function ageLabel(days: number): { text: string; tier: "new" | "ready" | "overdue" } {
-  if (days < MIN_STAGNANT_DAYS) return { text: `${days}d old`, tier: "new" };
+function ageLabel(days: number): { text: string; tier: "ready" | "overdue" } {
   if (days < OVERDUE_DAYS) return { text: `${days}d — ready to refresh`, tier: "ready" };
   return { text: `${days}d — overdue`, tier: "overdue" };
 }
@@ -37,7 +36,6 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmSku, setConfirmSku] = useState<string | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
 
   const load = useCallback(async () => {
@@ -87,17 +85,18 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
     }
   }, []);
 
-  const requestRefresh = (row: Row) => {
-    if (row.ageDays < MIN_STAGNANT_DAYS) {
-      setConfirmSku(row.sku);
-      return;
-    }
-    void refreshOne(row.sku);
-  };
+  // Everything rendered below is already 30+ days old (see stagnantRows), so
+  // refreshing never needs an "are you sure it's not too soon" confirmation.
+  const requestRefresh = (row: Row) => void refreshOne(row.sku);
+
+  const stagnantRows = useMemo(
+    () => (rows ?? []).filter((r) => r.ageDays >= MIN_STAGNANT_DAYS),
+    [rows]
+  );
 
   const stagnantSkus = useMemo(
-    () => (rows ?? []).filter((r) => r.ageDays >= MIN_STAGNANT_DAYS && r.state !== "refreshed").map((r) => r.sku),
-    [rows]
+    () => stagnantRows.filter((r) => r.state !== "refreshed").map((r) => r.sku),
+    [stagnantRows]
   );
 
   const refreshAllStagnant = async () => {
@@ -117,9 +116,10 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
         <div>
           <h2 className="section-label">Manage listings</h2>
           <p className="manage-listings-sub">
-            Wait at least {MIN_STAGNANT_DAYS} days before touching unsold inventory, then refresh it —
-            ending the old listing and creating a brand-new listing ID resets its position in eBay's
-            search and re-alerts interested buyers, instead of quietly relisting under the same thread.
+            Listings live {MIN_STAGNANT_DAYS}+ days with no sale — reseller best practice is to wait
+            that long, then refresh them. Refreshing ends the old listing and creates a brand-new
+            listing ID, which resets its position in eBay's search and re-alerts interested buyers,
+            instead of quietly relisting under the same thread.
           </p>
         </div>
         <button type="button" className="btn-ghost" onClick={onClose}>
@@ -161,9 +161,15 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
         <p className="manage-listings-empty">No active eBay listings found.</p>
       )}
 
-      {rows && rows.length > 0 && (
+      {!error && rows && rows.length > 0 && stagnantRows.length === 0 && !loading && (
+        <p className="manage-listings-empty">
+          Nothing stagnant yet — every active listing is under {MIN_STAGNANT_DAYS} days old.
+        </p>
+      )}
+
+      {stagnantRows.length > 0 && (
         <ul className="listing-rows">
-          {rows.map((row) => {
+          {stagnantRows.map((row) => {
             const age = ageLabel(row.ageDays);
             return (
               <li key={row.sku} className={`listing-row tier-${age.tier}`}>
@@ -211,24 +217,7 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
                   )}
                 </div>
                 <div className="listing-row-action">
-                  {row.state === "refreshed" ? null : confirmSku === row.sku ? (
-                    <div className="listing-row-confirm">
-                      <span>Only {row.ageDays}d old — refresh anyway?</span>
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        onClick={() => {
-                          setConfirmSku(null);
-                          void refreshOne(row.sku);
-                        }}
-                      >
-                        Yes, refresh
-                      </button>
-                      <button type="button" className="btn-ghost" onClick={() => setConfirmSku(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
+                  {row.state === "refreshed" ? null : (
                     <button
                       type="button"
                       className="btn-ghost"

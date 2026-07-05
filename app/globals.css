@@ -1129,11 +1129,6 @@ textarea {
   color: var(--color-ink-faint);
 }
 
-.badge-new {
-  background: var(--color-surface-sunk);
-  color: var(--color-ink-faint);
-}
-
 .badge-ready {
   background: var(--color-gold-soft);
   color: oklch(45% 0.1 70);
@@ -1146,12 +1141,4 @@ textarea {
 
 .listing-row-action {
   flex-shrink: 0;
-}
-
-.listing-row-confirm {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.82rem;
-  color: var(--color-ink-soft);
 }
