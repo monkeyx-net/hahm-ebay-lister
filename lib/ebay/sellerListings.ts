@@ -15,7 +15,9 @@ const MAX_PAGES = 10; // up to 2000 active listings scanned
 // as 0, since Date.parse("") is NaN). Once ANY OutputSelector is present it
 // REPLACES the default field set entirely (including PaginationResult), so
 // every field this module reads — and pagination itself — must be listed
-// explicitly here.
+// explicitly here. Selecting whole containers (not just the leaf field)
+// since eBay's OutputSelector matching for deep dotted paths is inconsistent
+// across Trading API calls — this is a belt-and-suspenders request.
 const OUTPUT_SELECTORS = [
   "ActiveList.PaginationResult.TotalNumberOfPages",
   "ActiveList.PaginationResult.TotalNumberOfEntries",
@@ -23,9 +25,12 @@ const OUTPUT_SELECTORS = [
   "ActiveList.ItemArray.Item.SKU",
   "ActiveList.ItemArray.Item.Title",
   "ActiveList.ItemArray.Item.Quantity",
+  "ActiveList.ItemArray.Item.ListingDetails",
   "ActiveList.ItemArray.Item.ListingDetails.StartTime",
+  "ActiveList.ItemArray.Item.SellingStatus",
   "ActiveList.ItemArray.Item.SellingStatus.CurrentPrice",
   "ActiveList.ItemArray.Item.SellingStatus.QuantitySold",
+  "ActiveList.ItemArray.Item.PictureDetails",
   "ActiveList.ItemArray.Item.PictureDetails.GalleryURL",
   "ActiveList.ItemArray.Item.Variations.Variation.SKU",
 ];
@@ -41,6 +46,7 @@ function requestXml(page: number): string {
       <PageNumber>${page}</PageNumber>
     </Pagination>
   </ActiveList>
+  <GranularityLevel>Coarse</GranularityLevel>
 ${selectors}
 </GetMyeBaySellingRequest>`;
 }
@@ -74,6 +80,12 @@ export async function fetchActiveListings(accessToken: string): Promise<EbayList
 
     const active = result.data?.ActiveList;
     const items: any[] = active?.ItemArray?.Item ?? [];
+    // Diagnostic: log the first item's raw parsed shape once, so a StartTime
+    // (or field-naming) mismatch is visible in server logs instead of only
+    // showing up as "every listing looks brand new" in the UI.
+    if (page === 1 && items[0]) {
+      console.log("[ebay/listings] sample parsed item:", JSON.stringify(items[0]).slice(0, 2000));
+    }
     for (const item of items) {
       // Multi-variation listings don't have a single SKU/price to refresh —
       // skip them rather than risk mis-mapping a variation's SKU to the parent.
