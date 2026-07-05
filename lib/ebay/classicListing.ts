@@ -173,9 +173,17 @@ ${pictures}
 
   const result = await callTradingApi(accessToken, "AddFixedPriceItem", xml);
   if (!result.ok) {
+    console.log(
+      `[ebay/classicListing] AddFixedPriceItem rejected: ${result.errors.map((e) => `${e.code}:${e.message}`).join("; ")}`
+    );
     return { ok: false, error: result.errors[0]?.message || "eBay rejected the new listing." };
   }
   const newItemId = textValue(result.data?.ItemID);
+  if (!newItemId) {
+    // eBay said Success/Warning but didn't hand back an ItemID — surface this
+    // distinctly rather than silently reporting success with nothing to link.
+    console.log(`[ebay/classicListing] AddFixedPriceItem ok but no ItemID in response: ${JSON.stringify(result.data).slice(0, 800)}`);
+  }
   return { ok: true, newItemId: newItemId || undefined };
 }
 
@@ -186,16 +194,20 @@ export async function refreshClassicListing(
 ): Promise<RefreshListingResult> {
   const { details, error } = await fetchClassicItemDetails(accessToken, itemId);
   if (!details) {
+    console.log(`[ebay/classicListing] itemId=${itemId} aborted before EndItem: ${error}`);
     return { success: false, sku: "", oldListingId: itemId, error: error || "Could not read the listing." };
   }
 
   const ended = await endClassicItem(accessToken, itemId);
   if (!ended.ok) {
+    console.log(`[ebay/classicListing] itemId=${itemId} EndItem failed: ${ended.error}`);
     return { success: false, sku: "", oldListingId: itemId, error: `End listing failed: ${ended.error}` };
   }
+  console.log(`[ebay/classicListing] itemId=${itemId} ended, relisting as "${details.title}"`);
 
   const relisted = await relistClassicItem(accessToken, details, setup);
   if (!relisted.ok) {
+    console.log(`[ebay/classicListing] itemId=${itemId} relist failed after ending: ${relisted.error}`);
     return {
       success: false,
       sku: "",
@@ -206,5 +218,6 @@ export async function refreshClassicListing(
     };
   }
 
+  console.log(`[ebay/classicListing] itemId=${itemId} relisted as newItemId=${relisted.newItemId || "(none returned)"}`);
   return { success: true, sku: "", oldListingId: itemId, newListingId: relisted.newItemId };
 }

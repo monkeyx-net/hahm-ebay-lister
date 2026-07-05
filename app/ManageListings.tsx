@@ -89,8 +89,13 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
     }
   }, []);
 
+  // A successful refresh resets ageDays to 0 (see refreshOne) so the row can
+  // show its new age next time the list is reloaded — but that same reset
+  // would otherwise make it fall out of this filter immediately, hiding the
+  // "✅ Refreshed" confirmation the instant it appears. Keep just-refreshed
+  // rows visible regardless of age until the list is next reloaded.
   const stagnantRows = useMemo(
-    () => (rows ?? []).filter((r) => r.ageDays >= MIN_STAGNANT_DAYS),
+    () => (rows ?? []).filter((r) => r.ageDays >= MIN_STAGNANT_DAYS || r.state === "refreshed"),
     [rows]
   );
 
