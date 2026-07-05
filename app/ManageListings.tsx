@@ -57,10 +57,14 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
     void load();
   }, [load]);
 
-  const refreshOne = useCallback(async (sku: string) => {
+  // Keyed by itemId (always present, always unique) rather than sku — many
+  // listings (anything never touched by this app's Inventory-API publish
+  // flow) have no SKU at all, so sku can't be relied on as a row identity.
+  const refreshOne = useCallback(async (row: Row) => {
+    const { itemId, sku } = row;
     setRows((prev) =>
       prev
-        ? prev.map((r) => (r.sku === sku ? { ...r, state: "refreshing", error: undefined } : r))
+        ? prev.map((r) => (r.itemId === itemId ? { ...r, state: "refreshing", error: undefined } : r))
         : prev
     );
     try {
@@ -70,7 +74,7 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
       setRows((prev) =>
         prev
           ? prev.map((r) =>
-              r.sku === sku
+              r.itemId === itemId
                 ? { ...r, state: "refreshed", ageDays: 0, itemId: data.newListingId || r.itemId, newListingId: data.newListingId }
                 : r
             )
@@ -79,31 +83,30 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
     } catch (e) {
       setRows((prev) =>
         prev
-          ? prev.map((r) => (r.sku === sku ? { ...r, state: "error", error: (e as Error).message } : r))
+          ? prev.map((r) => (r.itemId === itemId ? { ...r, state: "error", error: (e as Error).message } : r))
           : prev
       );
     }
   }, []);
-
-  // Everything rendered below is already 30+ days old (see stagnantRows), so
-  // refreshing never needs an "are you sure it's not too soon" confirmation.
-  const requestRefresh = (row: Row) => void refreshOne(row.sku);
 
   const stagnantRows = useMemo(
     () => (rows ?? []).filter((r) => r.ageDays >= MIN_STAGNANT_DAYS),
     [rows]
   );
 
-  const stagnantSkus = useMemo(
-    () => stagnantRows.filter((r) => r.state !== "refreshed").map((r) => r.sku),
+  // Only rows with a SKU map to a REST Inventory offer this app can withdraw
+  // + republish — SKU-less listings are still shown (they can be just as
+  // stagnant) but aren't auto-refreshable here.
+  const refreshableStagnantRows = useMemo(
+    () => stagnantRows.filter((r) => r.sku && r.state !== "refreshed"),
     [stagnantRows]
   );
 
   const refreshAllStagnant = async () => {
     setBulkRunning(true);
     try {
-      for (const sku of stagnantSkus) {
-        await refreshOne(sku);
+      for (const row of refreshableStagnantRows) {
+        await refreshOne(row);
       }
     } finally {
       setBulkRunning(false);
@@ -137,7 +140,7 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
             "↻ Refresh list"
           )}
         </button>
-        {stagnantSkus.length > 0 && (
+        {refreshableStagnantRows.length > 0 && (
           <button
             type="button"
             className="btn btn-primary"
@@ -146,7 +149,7 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
           >
             {bulkRunning
               ? "Refreshing…"
-              : `Refresh all stagnant (${stagnantSkus.length})`}
+              : `Refresh all stagnant (${refreshableStagnantRows.length})`}
           </button>
         )}
       </div>
@@ -172,14 +175,14 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
           {stagnantRows.map((row) => {
             const age = ageLabel(row.ageDays);
             return (
-              <li key={row.sku} className={`listing-row tier-${age.tier}`}>
+              <li key={row.itemId} className={`listing-row tier-${age.tier}`}>
                 {row.galleryUrl && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img className="listing-row-thumb" src={row.galleryUrl} alt="" />
                 )}
                 <div className="listing-row-main">
                   <div className="listing-row-title">
-                    <span className="sku-tag">{row.sku}</span>
+                    {row.sku && <span className="sku-tag">{row.sku}</span>}
                     {row.title}
                   </div>
                   <div className="listing-row-meta">
@@ -217,11 +220,15 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
                   )}
                 </div>
                 <div className="listing-row-action">
-                  {row.state === "refreshed" ? null : (
+                  {row.state === "refreshed" ? null : !row.sku ? (
+                    <span className="listing-row-no-sku">
+                      No SKU on this listing — refresh it manually on eBay (End listing → Sell similar).
+                    </span>
+                  ) : (
                     <button
                       type="button"
                       className="btn-ghost"
-                      onClick={() => requestRefresh(row)}
+                      onClick={() => void refreshOne(row)}
                       disabled={row.state === "refreshing" || bulkRunning}
                     >
                       {row.state === "refreshing" ? (

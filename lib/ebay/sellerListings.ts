@@ -80,18 +80,22 @@ export async function fetchActiveListings(accessToken: string): Promise<EbayList
 
     const active = result.data?.ActiveList;
     const items: any[] = active?.ItemArray?.Item ?? [];
-    // Diagnostic: log the first item's raw parsed shape once, so a StartTime
-    // (or field-naming) mismatch is visible in server logs instead of only
-    // showing up as "every listing looks brand new" in the UI.
-    if (page === 1 && items[0]) {
-      console.log("[ebay/listings] sample parsed item:", JSON.stringify(items[0]).slice(0, 2000));
-    }
+    let noSku = 0;
+    let variations = 0;
     for (const item of items) {
       // Multi-variation listings don't have a single SKU/price to refresh —
       // skip them rather than risk mis-mapping a variation's SKU to the parent.
-      if (item?.Variations) continue;
+      if (item?.Variations) {
+        variations++;
+        continue;
+      }
+      // No SKU (common for listings never touched by this app's Inventory-API
+      // publish flow — e.g. anything listed before this tool existed, or via
+      // eBay's own site) still gets SHOWN here since it can still be stagnant;
+      // it just can't be auto-refreshed (findOfferBySku has nothing to look
+      // up), which the UI flags instead of hiding the listing entirely.
       const sku = textValue(item?.SKU).trim();
-      if (!sku) continue; // can't map back to a REST offer without a SKU
+      if (!sku) noSku++;
 
       const startTime = textValue(item?.ListingDetails?.StartTime);
       const startMs = Date.parse(startTime);
@@ -115,6 +119,11 @@ export async function fetchActiveListings(accessToken: string): Promise<EbayList
         quantitySold: numberValue(item?.SellingStatus?.QuantitySold),
       });
     }
+
+    console.log(
+      `[ebay/listings] page=${page} items=${items.length} noSku=${noSku} variations=${variations} ` +
+        `now=${new Date(now).toISOString()}`
+    );
 
     const totalPages = numberValue(active?.PaginationResult?.TotalNumberOfPages);
     if (!totalPages || page >= totalPages) break;

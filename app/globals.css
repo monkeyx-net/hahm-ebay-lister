@@ -1141,4 +1141,12 @@ textarea {
 
 .listing-row-action {
   flex-shrink: 0;
+  max-width: 220px;
+  text-align: right;
+}
+
+.listing-row-no-sku {
+  font-size: 0.78rem;
+  color: var(--color-ink-faint);
+  font-style: italic;
 }
