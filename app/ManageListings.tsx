@@ -68,7 +68,7 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
         : prev
     );
     try {
-      const res = await apiPost("/api/ebay/refresh-listing", { sku });
+      const res = await apiPost("/api/ebay/refresh-listing", { sku, itemId });
       const data = (await res.json()) as RefreshListingResult;
       if (!data.success) throw new Error(data.error || "eBay rejected the refresh.");
       setRows((prev) =>
@@ -94,11 +94,11 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
     [rows]
   );
 
-  // Only rows with a SKU map to a REST Inventory offer this app can withdraw
-  // + republish — SKU-less listings are still shown (they can be just as
-  // stagnant) but aren't auto-refreshable here.
+  // Rows with a SKU refresh via a cheap REST withdraw+republish; SKU-less
+  // rows go through the heavier classic Trading API path (GetItem -> EndItem
+  // -> AddFixedPriceItem) — refreshOne/the server route pick the right one.
   const refreshableStagnantRows = useMemo(
-    () => stagnantRows.filter((r) => r.sku && r.state !== "refreshed"),
+    () => stagnantRows.filter((r) => r.state !== "refreshed"),
     [stagnantRows]
   );
 
@@ -220,25 +220,26 @@ export function ManageListings({ market, onClose }: ManageListingsProps) {
                   )}
                 </div>
                 <div className="listing-row-action">
-                  {row.state === "refreshed" ? null : !row.sku ? (
-                    <span className="listing-row-no-sku">
-                      No SKU on this listing — refresh it manually on eBay (End listing → Sell similar).
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn-ghost"
-                      onClick={() => void refreshOne(row)}
-                      disabled={row.state === "refreshing" || bulkRunning}
-                    >
-                      {row.state === "refreshing" ? (
-                        <>
-                          <span className="spinner small" aria-hidden="true" /> Refreshing…
-                        </>
-                      ) : (
-                        "↻ Refresh listing"
+                  {row.state === "refreshed" ? null : (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() => void refreshOne(row)}
+                        disabled={row.state === "refreshing" || bulkRunning}
+                      >
+                        {row.state === "refreshing" ? (
+                          <>
+                            <span className="spinner small" aria-hidden="true" /> Refreshing…
+                          </>
+                        ) : (
+                          "↻ Refresh listing"
+                        )}
+                      </button>
+                      {!row.sku && row.state === "idle" && (
+                        <p className="listing-row-no-sku">No SKU — recreates the listing from scratch.</p>
                       )}
-                    </button>
+                    </>
                   )}
                 </div>
               </li>

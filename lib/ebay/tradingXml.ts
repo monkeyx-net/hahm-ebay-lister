@@ -5,12 +5,20 @@
 import { XMLParser } from "fast-xml-parser";
 import { EBAY_TRADING, EBAY_SITE_ID } from "./config";
 
+const ARRAY_TAGS = new Set([
+  "Item", // GetMyeBaySelling's ItemArray
+  "Variation", // multi-variation listings
+  "PictureURL", // GetItem's PictureDetails
+  "NameValueList", // GetItem's ItemSpecifics
+  "Value", // NameValueList can hold multiple values per aspect
+]);
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
-  // GetMyeBaySelling's ItemArray can hold one or many <Item> — always give
-  // callers an array so they don't have to special-case the singular case.
-  isArray: (name) => name === "Item" || name === "Variation",
+  // Always give callers an array for repeatable elements, so call sites don't
+  // have to special-case "one result" vs "many results".
+  isArray: (name) => ARRAY_TAGS.has(name),
 });
 
 export interface TradingApiResult {
@@ -53,4 +61,32 @@ export async function callTradingApi(
   }));
 
   return { ok: resp.ok && (ack === "Success" || ack === "Warning"), data: root, errors };
+}
+
+// Trading API mixes plain values and { "@_currencyID": ..., "#text": ... }
+// attributed values depending on whether the element carries attributes.
+export function textValue(v: any): string {
+  if (v == null) return "";
+  if (typeof v === "object") return String(v["#text"] ?? "");
+  return String(v);
+}
+
+export function numberValue(v: any): number {
+  const n = Number(textValue(v));
+  return Number.isFinite(n) ? n : 0;
+}
+
+// Escape plain-text XML content (element bodies, not already-CDATA-wrapped).
+export function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// Wrap text as CDATA, guarding against a literal "]]>" breaking out early.
+export function cdata(s: string): string {
+  return `<![CDATA[${s.replace(/]]>/g, "]]]]><![CDATA[>")}]]>`;
 }

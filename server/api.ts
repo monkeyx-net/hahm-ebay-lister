@@ -34,6 +34,7 @@ import { fetchAccountSetup, publishListing, clearAccountSetupCache } from "../li
 import type { PublishInput } from "../lib/ebay/publish";
 import { fetchActiveListings } from "../lib/ebay/sellerListings";
 import { refreshListing } from "../lib/ebay/refresh";
+import { refreshClassicListing } from "../lib/ebay/classicListing";
 import type { AnalyzeRequestBody, ListingResult, ModelOption, ModelsPayload } from "../lib/types";
 
 export const api = new Hono();
@@ -599,19 +600,22 @@ api.post("/ebay/refresh-listing", async (c) => {
   if (denied) return denied;
 
   let sku = "";
+  let itemId = "";
   try {
-    const body = (await c.req.json()) as { sku?: string };
+    const body = (await c.req.json()) as { sku?: string; itemId?: string };
     sku = String(body.sku ?? "").trim();
+    itemId = String(body.itemId ?? "").trim();
   } catch {
     /* fall through to validation */
   }
-  if (!sku) {
-    return c.json({ success: false, error: "Missing SKU." }, 400);
+  if (!sku && !itemId) {
+    return c.json({ success: false, error: "Missing SKU or item ID." }, 400);
   }
 
+  const ebayCookie = getCookie(c, EBAY_COOKIE);
   let accessToken: string | null;
   try {
-    accessToken = await accessTokenFromCookie(getCookie(c, EBAY_COOKIE));
+    accessToken = await accessTokenFromCookie(ebayCookie);
   } catch (e) {
     return c.json({ success: false, error: (e as Error).message }, 500);
   }
@@ -623,10 +627,30 @@ api.post("/ebay/refresh-listing", async (c) => {
   }
 
   try {
-    const result = await refreshListing(accessToken, sku);
+    // SKU present → this listing was published via this app's Inventory API
+    // flow; a cheap withdraw+republish on the same offer is enough. No SKU
+    // (most pre-existing inventory) needs the heavier classic Trading API
+    // path: read the full listing, end it, recreate it from scratch.
+    if (sku) {
+      const result = await refreshListing(accessToken, sku);
+      return c.json(result, result.success ? 200 : 422);
+    }
+    const connKey = createHash("sha256").update(ebayCookie ?? "").digest("hex").slice(0, 16);
+    const setup = await fetchAccountSetup(accessToken, connKey);
+    if (!setup.paymentPolicyId || !setup.returnPolicyId || !setup.fulfillmentPolicyId) {
+      return c.json(
+        {
+          success: false,
+          error:
+            "Your eBay account is missing a business policy (payment, shipping, or returns), which the classic relist path requires. Set these up in eBay → Account → Business policies, then try again.",
+        },
+        422
+      );
+    }
+    const result = await refreshClassicListing(accessToken, itemId, setup);
     return c.json(result, result.success ? 200 : 422);
   } catch (e) {
-    console.error(`[ebay/refresh-listing] unhandled error sku=${sku}:`, e);
+    console.error(`[ebay/refresh-listing] unhandled error sku=${sku} itemId=${itemId}:`, e);
     return c.json({ success: false, sku, error: (e as Error).message }, 500);
   }
 });

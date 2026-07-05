@@ -4,7 +4,7 @@
 // exposes a listing's start date, which is what "how stagnant is this?"
 // needs.
 
-import { callTradingApi } from "./tradingXml";
+import { callTradingApi, textValue, numberValue } from "./tradingXml";
 import type { EbayListingSummary } from "../types";
 
 const PAGE_SIZE = 200;
@@ -49,19 +49,6 @@ function requestXml(page: number): string {
   <GranularityLevel>Coarse</GranularityLevel>
 ${selectors}
 </GetMyeBaySellingRequest>`;
-}
-
-// Trading API mixes plain values and { "@_currencyID": ..., "#text": ... }
-// attributed values depending on whether the element carries attributes.
-function textValue(v: any): string {
-  if (v == null) return "";
-  if (typeof v === "object") return String(v["#text"] ?? "");
-  return String(v);
-}
-
-function numberValue(v: any): number {
-  const n = Number(textValue(v));
-  return Number.isFinite(n) ? n : 0;
 }
 
 export async function fetchActiveListings(accessToken: string): Promise<EbayListingSummary[]> {

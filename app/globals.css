@@ -1146,7 +1146,9 @@ textarea {
 }
 
 .listing-row-no-sku {
+  margin: 0.35rem 0 0;
   font-size: 0.78rem;
   color: var(--color-ink-faint);
   font-style: italic;
+  text-align: right;
 }
