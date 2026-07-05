@@ -10,7 +10,28 @@ import type { EbayListingSummary } from "../types";
 const PAGE_SIZE = 200;
 const MAX_PAGES = 10; // up to 2000 active listings scanned
 
+// eBay's default GetMyeBaySelling response omits several fields we need
+// (notably ListingDetails.StartTime — without it every listing's age reads
+// as 0, since Date.parse("") is NaN). Once ANY OutputSelector is present it
+// REPLACES the default field set entirely (including PaginationResult), so
+// every field this module reads — and pagination itself — must be listed
+// explicitly here.
+const OUTPUT_SELECTORS = [
+  "ActiveList.PaginationResult.TotalNumberOfPages",
+  "ActiveList.PaginationResult.TotalNumberOfEntries",
+  "ActiveList.ItemArray.Item.ItemID",
+  "ActiveList.ItemArray.Item.SKU",
+  "ActiveList.ItemArray.Item.Title",
+  "ActiveList.ItemArray.Item.Quantity",
+  "ActiveList.ItemArray.Item.ListingDetails.StartTime",
+  "ActiveList.ItemArray.Item.SellingStatus.CurrentPrice",
+  "ActiveList.ItemArray.Item.SellingStatus.QuantitySold",
+  "ActiveList.ItemArray.Item.PictureDetails.GalleryURL",
+  "ActiveList.ItemArray.Item.Variations.Variation.SKU",
+];
+
 function requestXml(page: number): string {
+  const selectors = OUTPUT_SELECTORS.map((s) => `  <OutputSelector>${s}</OutputSelector>`).join("\n");
   return `<?xml version="1.0" encoding="utf-8"?>
 <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ActiveList>
@@ -20,6 +41,7 @@ function requestXml(page: number): string {
       <PageNumber>${page}</PageNumber>
     </Pagination>
   </ActiveList>
+${selectors}
 </GetMyeBaySellingRequest>`;
 }
 
