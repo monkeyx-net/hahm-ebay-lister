@@ -18,6 +18,8 @@ own eBay developer keys, so you're in full control and there's no middleman.
 - 🤖 Writes a title, description, item specifics, condition, and suggested price
 - ✍️ Everything is editable before you post
 - 🚀 Posts straight to eBay — one item or the whole batch
+- ♻️ Refreshes stale listings — spot active items sitting 30+ days and re-list
+  them in one click (End + Sell Similar) to reset their age, keeping the photos
 - 📋 Or export everything as CSV / JSON
 - 🔒 Your keys live in environment variables, never in the code
 
@@ -168,6 +170,44 @@ connect eBay from `localhost` too — see **Connecting eBay locally** below.)
 
 ---
 
+## Refresh stale listings (Manage Listings)
+
+Listings that sit unsold for weeks stop getting shown much — the reseller fix is
+to **end and re-list** them so they get a fresh start date (the classic "Sell
+Similar" tactic). This app does it for you in one click.
+
+Once eBay is connected, a **📦 Manage listings** button appears. It pulls your
+**active** listings and shows the ones that are **30+ days old** — the point
+where a stale item is worth refreshing. Each is labelled:
+
+- **ready to refresh** (30–90 days), and
+- **overdue** (90+ days).
+
+Newer listings are left off the list on purpose: under ~30 days an item is still
+gathering views, so there's nothing to fix.
+
+Hit **Refresh listing** on a row (or **Refresh all stagnant** to do the whole
+list) and the app **ends the item and immediately re-lists it** — same photos,
+same content, no re-upload and no rewriting. eBay gives the re-listed item a new
+listing ID and a fresh start date.
+
+It works for **both** kinds of listing:
+
+- **Listings this app posted** (they carry an Inventory-API SKU) are refreshed
+  by withdrawing and re-publishing the same offer.
+- **Everything else** — listings you created by hand or with other tools — is
+  refreshed with the classic Trading API (`GetItem → EndItem → AddFixedPriceItem`),
+  reusing the photos eBay already hosts. Before ending anything, the app checks
+  it can faithfully recreate the listing (title, category, country, currency, at
+  least one photo); if a re-list ever fails after the item was ended, you get a
+  clear "ended but relist failed" message with the details to re-create it by hand.
+
+> **Heads up:** re-listing creates a **new listing ID**, which resets watchers
+> and the item's URL. That's the intended "sell similar" behaviour — an old
+> stagnant listing traded for a fresh one.
+
+---
+
 ## Environment variables
 
 | Variable | Required | What it is |
@@ -262,6 +302,10 @@ flowchart TD
 - **`/api/analyze`**: writes a listing for one item from its photos.
 - **`/api/ebay/*`**: OAuth connect (encrypted-cookie token) + the
   inventory→offer→publish flow, with recovery for eBay's category/aspect quirks.
+- **`/api/ebay/listings`** & **`/api/ebay/refresh-listing`**: list active
+  listings (via `GetMyeBaySelling`, which exposes each item's start date) and
+  end-and-relist stagnant ones — REST withdraw/republish for SKU'd offers, the
+  classic `GetItem→EndItem→AddFixedPriceItem` path for the rest.
 - **`/api/health`**: unauthenticated liveness probe for container health checks.
 - **Stack**: React + Vite (client) and Hono on Node (server), TypeScript
   throughout, packaged as a single Docker image. Nothing is stored server-side;
