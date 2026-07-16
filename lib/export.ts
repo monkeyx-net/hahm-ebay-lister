@@ -50,6 +50,56 @@ export function listingsToCsv(groups: ItemGroup[]): string {
   return [headerRow, ...rows].join("\r\n");
 }
 
+// Maps our eBay-style condition grades to Vinted's own condition wording,
+// since Vinted has no "Excellent" tier — it folds that into "Very good".
+const VINTED_CONDITION_MAP: Record<string, string> = {
+  NEW_WITH_TAGS: "New with tags",
+  NEW_NO_TAGS: "New without tags",
+  EXCELLENT: "Very good",
+  VERY_GOOD: "Very good",
+  GOOD: "Good",
+  FAIR: "Satisfactory",
+};
+
+function vintedCondition(condition: string | undefined): string {
+  if (!condition) return "";
+  return VINTED_CONDITION_MAP[condition] ?? condition.replace(/_/g, " ");
+}
+
+const VINTED_CSV_COLUMNS: { header: string; get: (l: ListingResult) => string }[] = [
+  { header: "Title", get: (l) => l.title ?? "" },
+  { header: "Description", get: (l) => l.description ?? "" },
+  { header: "Price", get: (l) => priceNumber(l.suggested_price) },
+  { header: "Brand", get: (l) => l.brand ?? "" },
+  { header: "Size", get: (l) => l.size ?? "" },
+  {
+    header: "Color",
+    get: (l) => (Array.isArray(l.color) ? l.color.join(", ") : l.color ?? ""),
+  },
+  { header: "Material", get: (l) => l.material ?? "" },
+  { header: "Condition", get: (l) => vintedCondition(l.condition) },
+  { header: "Category Hint", get: (l) => l.category_hint ?? "" },
+];
+
+// Vinted has no bulk-upload API or import format — this is a reference
+// spreadsheet (Vinted's own condition wording, one row per finished listing)
+// to copy from while listing manually in the Vinted app.
+export function listingsToVintedCsv(groups: ItemGroup[]): string {
+  const done = groups.filter((g) => g.listing);
+  const headerRow = ["SKU", "Item Name", ...VINTED_CSV_COLUMNS.map((c) => c.header)]
+    .map(csvCell)
+    .join(",");
+  const rows = done.map((g) => {
+    const l = g.listing as ListingResult;
+    return [
+      csvCell(g.sku),
+      csvCell(g.name),
+      ...VINTED_CSV_COLUMNS.map((c) => csvCell(c.get(l))),
+    ].join(",");
+  });
+  return [headerRow, ...rows].join("\r\n");
+}
+
 export function listingsToJson(groups: ItemGroup[]): string {
   const payload = groups
     .filter((g) => g.listing)

@@ -5,6 +5,7 @@ import {
   downloadFile,
   listingsToCsv,
   listingsToJson,
+  listingsToVintedCsv,
 } from "@/lib/export";
 import type { ItemGroup, ListingResult, MarketConfig, Photo } from "@/lib/types";
 
@@ -117,6 +118,20 @@ export function ListingsView({
           }
         >
           ⬇️ Download spreadsheet (CSV)
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={done === 0}
+          onClick={() =>
+            downloadFile(
+              "vinted-listings.csv",
+              listingsToVintedCsv(groups),
+              "text/csv"
+            )
+          }
+        >
+          ⬇️ Export for Vinted
         </button>
         <button
           type="button"
