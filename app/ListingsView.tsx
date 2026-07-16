@@ -7,6 +7,7 @@ import {
   listingsToJson,
 } from "@/lib/export";
 import type { ItemGroup, ListingResult, Photo } from "@/lib/types";
+import { listingsToVintedCsv } from "@/lib/vinted";
 
 interface ListingsViewProps {
   groups: ItemGroup[];
@@ -106,6 +107,20 @@ export function ListingsView({
           }
         >
           ⬇️ Download spreadsheet (CSV)
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={done === 0}
+          onClick={() =>
+            downloadFile(
+              "vinted-listings.csv",
+              listingsToVintedCsv(groups),
+              "text/csv"
+            )
+          }
+        >
+          ⬇️ Download Vinted CSV
         </button>
         <button
           type="button"

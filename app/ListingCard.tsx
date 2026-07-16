@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SIZE_REQUIRED_CATEGORIES } from "@/lib/categories";
 import type { ItemGroup, ListingResult, Photo } from "@/lib/types";
+import { formatListingForVinted } from "@/lib/vinted";
 
 const TITLE_LIMIT = 80;
 
@@ -238,6 +239,10 @@ export function ListingCard({
             />
             <div className="copy-row">
               <CopyButton text={listing.description} label="description" />
+              <CopyButton
+                text={formatListingForVinted(listing)}
+                label="for Vinted"
+              />
             </div>
           </div>
 

@@ -1,11 +1,11 @@
 import type { ItemGroup, ListingResult } from "@/lib/types";
 
-function priceNumber(value: ListingResult["suggested_price"]): string {
+export function priceNumber(value: ListingResult["suggested_price"]): string {
   const n = typeof value === "string" ? parseFloat(value) : value;
   return n === undefined || Number.isNaN(n) ? "" : n.toFixed(2);
 }
 
-function csvCell(value: unknown): string {
+export function csvCell(value: unknown): string {
   const s = value == null ? "" : String(value);
   // Always quote and escape embedded quotes so commas/newlines stay safe.
   return `"${s.replace(/"/g, '""')}"`;
