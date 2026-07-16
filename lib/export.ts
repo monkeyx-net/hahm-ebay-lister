@@ -81,6 +81,29 @@ const VINTED_CSV_COLUMNS: { header: string; get: (l: ListingResult) => string }[
   { header: "Category Hint", get: (l) => l.category_hint ?? "" },
 ];
 
+// A clipboard-friendly block covering everything Vinted's listing form asks
+// for, for pasting into a single Vinted listing by hand (Vinted has no bulk
+// entry, so listings still go in one at a time).
+export function formatListingForVinted(listing: ListingResult): string {
+  const color = Array.isArray(listing.color)
+    ? listing.color.join(", ")
+    : listing.color ?? "";
+  const lines = [
+    `Title: ${listing.title}`,
+    `Price: ${priceNumber(listing.suggested_price)}`,
+    listing.brand && `Brand: ${listing.brand}`,
+    listing.size && `Size: ${listing.size}`,
+    `Condition: ${vintedCondition(listing.condition)}`,
+    color && `Color: ${color}`,
+    listing.material && `Material: ${listing.material}`,
+    listing.category_hint && `Category: ${listing.category_hint}`,
+    "",
+    "Description:",
+    listing.description,
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
 // Vinted has no bulk-upload API or import format — this is a reference
 // spreadsheet (Vinted's own condition wording, one row per finished listing)
 // to copy from while listing manually in the Vinted app.
