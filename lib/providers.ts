@@ -59,6 +59,25 @@ export function ensureProviderConfigured(provider: AiProvider): void {
   }
 }
 
+// Choose a fallback model for when the client sends no valid {provider, model}
+// choice. Prefer the caller's Anthropic default when Anthropic is configured;
+// otherwise fall back to a configured provider so an OpenRouter/OmniRoute-only
+// deployment works without an Anthropic key (instead of throwing "ANTHROPIC_API_KEY
+// is not set"). Relies on the OpenRouter catalog already being refreshed by the
+// caller (ensureOpenRouterCatalogFresh) before this runs.
+export function preferredDefaultRef(anthropicDefault: ModelRef): ModelRef {
+  if (process.env.ANTHROPIC_API_KEY) return anthropicDefault;
+  if (isOpenRouterConfigured()) {
+    const m = filterOpenRouterModels(currentOpenRouterCatalog(), { requireVision: true })[0];
+    if (m) return { provider: "openrouter", model: m.id };
+  }
+  if (isOmniRouteConfigured()) {
+    const [id] = parseAllowedOmniRouteModels();
+    if (id) return { provider: "omniroute", model: id };
+  }
+  return anthropicDefault; // nothing configured → keep the clear "not set" error
+}
+
 // ── Making the call ───────────────────────────────────────────────────────────
 
 export interface VisionCallUsage {

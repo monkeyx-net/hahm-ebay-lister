@@ -69,25 +69,32 @@ export function ModelSelector() {
       .then((data: ModelsPayload) => {
         setModels(data);
 
+        // Persist the resolved default to localStorage when there's no valid
+        // saved choice, so page.tsx (which reads the request's {provider, model}
+        // straight from localStorage) sends this default instead of nothing —
+        // otherwise the server would fall back to its own default provider, which
+        // may not match what the picker shows.
         const defaultSort =
           data.sortModels.find((m) => m.isDefault) ?? data.sortModels[0];
-        setSortModel(
+        const resolvedSort =
           savedSort && data.sortModels.some((m) => sameChoice(savedSort, m))
             ? savedSort
             : defaultSort
               ? { provider: defaultSort.provider, model: defaultSort.id }
-              : null
-        );
+              : null;
+        if (resolvedSort && resolvedSort !== savedSort) saveSortModel(resolvedSort);
+        setSortModel(resolvedSort);
 
         const defaultAnalysis =
           data.analysisModels.find((m) => m.isDefault) ?? data.analysisModels[0];
-        setAnalysisModel(
+        const resolvedAnalysis =
           savedAnalysis && data.analysisModels.some((m) => sameChoice(savedAnalysis, m))
             ? savedAnalysis
             : defaultAnalysis
               ? { provider: defaultAnalysis.provider, model: defaultAnalysis.id }
-              : null
-        );
+              : null;
+        if (resolvedAnalysis && resolvedAnalysis !== savedAnalysis) saveAnalysisModel(resolvedAnalysis);
+        setAnalysisModel(resolvedAnalysis);
       })
       .catch(() => {
         setLoadError(true);

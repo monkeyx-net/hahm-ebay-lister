@@ -26,6 +26,7 @@ import {
   isProviderAuthError,
   omniRouteDisplayNames,
   parseAllowedOmniRouteModels,
+  preferredDefaultRef,
   providerAuthError,
   refreshOpenRouterCatalog,
   resolveModelRef,
@@ -143,12 +144,12 @@ api.post("/analyze", async (c) => {
   await ensureOpenRouterCatalogFresh();
   const analysisRef = resolveModelRef(
     { provider: body.analysisProvider, model: body.analysisModel },
-    ANALYSIS_MODEL,
+    preferredDefaultRef(ANALYSIS_MODEL),
     { requireVision: true }
   );
   const routerRef = resolveModelRef(
     { provider: body.routerProvider, model: body.routerModel },
-    ROUTER_MODEL,
+    preferredDefaultRef(ROUTER_MODEL),
     { requireVision: true }
   );
 
@@ -239,7 +240,7 @@ api.post("/sort", async (c) => {
   await ensureOpenRouterCatalogFresh();
   const sortRef = resolveModelRef(
     { provider: body.sortProvider, model: body.sortModel },
-    SORT_MODEL_DEFAULT,
+    preferredDefaultRef(SORT_MODEL_DEFAULT),
     { requireVision: true }
   );
 
