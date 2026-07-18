@@ -1,5 +1,14 @@
 # Listing Writer 🪄
 
+> **This is a fork** of [ashnicholes-droid/ebay-lister](https://github.com/ashnicholes-droid/ebay-lister),
+> re-platformed for self-hosting with a few extra features layered on top.
+> Key differences from the original:
+> - **Self-hosted, not Vercel** — rebuilt on Docker/Coolify with a Vite (React) client + Hono server, in place of the original's Next.js-on-Vercel setup
+> - **Multi-provider AI** — the per-step model picker now offers free/cheap [OpenRouter](https://openrouter.ai/) models (e.g. DeepSeek, Gemini Flash) alongside Anthropic Claude, instead of Claude only
+> - **Hardened access control** — an access-code gate, rate limiting, and a server-side model allowlist protect the AI and eBay endpoints from abuse
+> - **Manage Listings dashboard** — one-click refresh/relist for stagnant eBay listings (End + Sell Similar)
+> - **Vinted cross-listing** — CSV export and a "Copy for Vinted" clipboard button per item
+
 A free, open-source web app for resellers. **Dump in a pile of item photos →
 it sorts them into separate items → writes a full eBay listing for each →
 posts them to eBay.** Runs as your own private website, self-hosted with Docker
