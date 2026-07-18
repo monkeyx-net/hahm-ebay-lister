@@ -5,19 +5,31 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import type Anthropic from "@anthropic-ai/sdk";
+import { getClient, parseModelJson } from "../lib/anthropic";
 import type { ModelInfo } from "@anthropic-ai/sdk/resources/models.js";
+import type { OpenRouterModel } from "../lib/openrouter";
+import { isAllowedModel } from "../lib/models";
 
-import { getClient, parseModelJson, AnthropicAuthError, anthropicAuthError } from "../lib/anthropic";
 import { guardApiRequest, rateLimitRequest, safeErrorResponse } from "../lib/api-guard";
 import {
   PROFILE_ROUTER_PROMPT,
   buildProfiledAnalysisPrompt,
   normalizeItemProfile,
 } from "../lib/prompts";
-import { toImageBlock, type ImageBlock, type WireImage } from "../lib/images";
-import { resolveModel, isAllowedModel } from "../lib/models";
-import { sortPhotos, SortUnavailableError } from "../lib/sortPipeline";
+import { isValidImage, type GenericContentPart, type WireImage } from "../lib/images";
+import {
+  callVisionModel,
+  currentOpenRouterCatalog,
+  ensureProviderConfigured,
+  filterOpenRouterModels,
+  isOpenRouterConfigured,
+  isProviderAuthError,
+  providerAuthError,
+  refreshOpenRouterCatalog,
+  resolveModelRef,
+  type ModelRef,
+} from "../lib/providers";
+import { sortPhotos, SortUnavailableError, SORT_MODEL_DEFAULT } from "../lib/sortPipeline";
 import { isEbayConfigured, currencySymbol, EBAY_ITEM_BASE_URL } from "../lib/ebay/config";
 import { buildAuthorizeUrl, exchangeCode } from "../lib/ebay/oauth";
 import { fetchActiveComps } from "../lib/ebay/pricing";
@@ -53,52 +65,50 @@ const COOKIE_BASE = {
 api.get("/health", (c) => c.json({ ok: true, status: "healthy" }));
 
 // ── /api/analyze ────────────────────────────────────────────────────────────
-const ANALYSIS_MODEL = "claude-opus-4-8";
-const ROUTER_MODEL = "claude-sonnet-4-6";
+const ANALYSIS_MODEL: ModelRef = { provider: "anthropic", model: "claude-opus-4-8" };
+const ROUTER_MODEL: ModelRef = SORT_MODEL_DEFAULT; // "claude-sonnet-4-6" — cheap/fast, shared with sort's default
 const MAX_IMAGES = 12;
 
-function firstText(resp: Anthropic.Message): string {
-  const block = resp.content.find((b) => b.type === "text");
-  return block && block.type === "text" ? block.text.trim() : "";
+function toImageParts(images: AnalyzeRequestBody["images"]): GenericContentPart[] {
+  const parts: GenericContentPart[] = [];
+  for (const img of images.slice(0, MAX_IMAGES)) {
+    if (isValidImage(img)) parts.push({ type: "image", image: img });
+  }
+  return parts;
 }
 
-function toImageBlocks(images: AnalyzeRequestBody["images"]): ImageBlock[] {
-  const blocks: ImageBlock[] = [];
-  for (const img of images.slice(0, MAX_IMAGES)) {
-    const block = toImageBlock(img);
-    if (block) blocks.push(block);
+// Refreshes the OpenRouter catalog (no-op if unconfigured, or if still fresh)
+// so a client-supplied OpenRouter model can be validated against live data.
+async function ensureOpenRouterCatalogFresh(): Promise<void> {
+  if (!isOpenRouterConfigured()) return;
+  try {
+    await refreshOpenRouterCatalog();
+  } catch (e) {
+    console.warn("[models] failed to refresh OpenRouter catalog:", (e as Error).message);
   }
-  return blocks;
 }
 
 // Mirrors route_item_profile(): honor a forced profile, else ask the model.
 async function routeProfile(
-  client: Anthropic,
-  imageBlocks: ImageBlock[],
+  imageParts: GenericContentPart[],
   requested: string,
-  routerModel: string
+  routerRef: ModelRef
 ): Promise<string> {
   const forced = normalizeItemProfile(requested);
   if (forced !== "auto") return forced;
 
   try {
-    const resp = await client.messages.create({
-      model: routerModel,
-      max_tokens: 300,
-      messages: [
-        {
-          role: "user",
-          content: [...imageBlocks, { type: "text", text: PROFILE_ROUTER_PROMPT }],
-        },
-      ],
+    const result = await callVisionModel({
+      ref: routerRef,
+      maxTokens: 300,
+      content: [...imageParts, { type: "text", text: PROFILE_ROUTER_PROMPT }],
     });
-    const text = firstText(resp);
-    const data = parseModelJson<{ profile?: string }>(text);
+    const data = parseModelJson<{ profile?: string }>(result.text);
     const routed = normalizeItemProfile(data?.profile ?? "auto");
     return routed !== "auto" ? routed : "hard_goods";
   } catch (e) {
     // Auth/billing failures must surface, not silently fall back to a profile.
-    const fatal = anthropicAuthError(e);
+    const fatal = providerAuthError(e, routerRef.provider);
     if (fatal) throw fatal;
     return "hard_goods";
   }
@@ -115,71 +125,76 @@ api.post("/analyze", async (c) => {
     return c.json({ ok: false, error: "Invalid request body." }, 400);
   }
 
-  // Validate client-supplied models against the server allowlist; fall back to
-  // the trusted default on anything unknown (prevents billing an arbitrary or
-  // premium model to the owner's key).
-  const analysisModel = resolveModel(body.analysisModel, ANALYSIS_MODEL);
-  const routerModel = resolveModel(body.routerModel, ROUTER_MODEL);
-
   if (!Array.isArray(body.images) || body.images.length === 0) {
     return c.json({ ok: false, error: "Please add at least one photo." }, 400);
   }
 
-  const imageBlocks = toImageBlocks(body.images);
-  if (imageBlocks.length === 0) {
+  const imageParts = toImageParts(body.images);
+  if (imageParts.length === 0) {
     return c.json({ ok: false, error: "No readable photos found. Use JPG, PNG, or WebP." }, 400);
   }
 
-  let client: Anthropic;
+  // Validate client-supplied {provider, model} against the server allowlist;
+  // fall back to the trusted default on anything unknown (prevents billing an
+  // arbitrary, non-vision, or premium model to the owner's key). Both routes
+  // are vision calls (they always send photos), so both require vision.
+  await ensureOpenRouterCatalogFresh();
+  const analysisRef = resolveModelRef(
+    { provider: body.analysisProvider, model: body.analysisModel },
+    ANALYSIS_MODEL,
+    { requireVision: true }
+  );
+  const routerRef = resolveModelRef(
+    { provider: body.routerProvider, model: body.routerModel },
+    ROUTER_MODEL,
+    { requireVision: true }
+  );
+
   try {
-    client = getClient();
+    ensureProviderConfigured(routerRef.provider);
+    ensureProviderConfigured(analysisRef.provider);
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 500);
   }
 
   try {
-    const profile = await routeProfile(client, imageBlocks, body.profile, routerModel);
+    const profile = await routeProfile(imageParts, body.profile, routerRef);
     const systemPrompt = buildProfiledAnalysisPrompt(profile);
 
     // Retry up to 3 times, mirroring the Python analyze_photos() loop.
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const resp = await client.messages.create({
-          model: analysisModel,
-          max_tokens: 3000,
+        const result = await callVisionModel({
+          ref: analysisRef,
+          maxTokens: 3000,
           // System prompt is large and identical across requests for the same
-          // profile — cache it to cut cost and latency.
-          system: [
-            { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
-          ],
-          messages: [
-            {
-              role: "user",
-              content: [
-                ...imageBlocks,
-                { type: "text", text: "Analyze these photos and return the listing JSON now." },
-              ],
-            },
+          // profile — cache it (Anthropic only) to cut cost and latency.
+          system: systemPrompt,
+          cacheSystem: true,
+          content: [
+            ...imageParts,
+            { type: "text", text: "Analyze these photos and return the listing JSON now." },
           ],
         });
         // Cost visibility. Verified via scripts/measure-cache.ts: the built system
         // prompt is ~5,361 tokens on claude-opus-4-8 — above the 4096-token minimum
-        // cacheable prefix — so the ephemeral cache above DOES fire. Expect
-        // cache_read>0 on the 2nd+ same-profile request within the 5-min window.
-        const u = resp.usage;
+        // cacheable prefix — so the ephemeral cache above DOES fire on Anthropic.
+        // Expect cache_read>0 on the 2nd+ same-profile request within the 5-min
+        // window. OpenRouter has no equivalent, so those fields stay 0 there.
+        const u = result.usage;
         console.log(
-          `[analyze] usage model=${analysisModel} profile=${profile} ` +
+          `[analyze] usage provider=${analysisRef.provider} model=${analysisRef.model} profile=${profile} ` +
             `input=${u.input_tokens} ` +
             `cache_write=${u.cache_creation_input_tokens ?? 0} ` +
             `cache_read=${u.cache_read_input_tokens ?? 0} ` +
             `output=${u.output_tokens}`
         );
-        const listing = parseModelJson<ListingResult>(firstText(resp));
+        const listing = parseModelJson<ListingResult>(result.text);
         listing.item_profile = profile;
         return c.json({ ok: true, listing });
       } catch (err) {
-        const fatal = anthropicAuthError(err);
+        const fatal = providerAuthError(err, analysisRef.provider);
         if (fatal) throw fatal; // auth/billing won't fix itself on retry
         lastErr = err;
         if (attempt < 2) {
@@ -189,7 +204,7 @@ api.post("/analyze", async (c) => {
     }
     throw lastErr;
   } catch (e) {
-    if (e instanceof AnthropicAuthError) {
+    if (isProviderAuthError(e)) {
       console.error("[analyze] auth/billing failure:", e.message);
       return c.json({ ok: false, error: e.message }, e.status as 401 | 402 | 500);
     }
@@ -204,7 +219,7 @@ api.post("/sort", async (c) => {
   const denied = guardApiRequest(c.req.raw);
   if (denied) return denied;
 
-  let body: { images?: WireImage[]; sortModel?: string };
+  let body: { images?: WireImage[]; sortModel?: string; sortProvider?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -212,24 +227,28 @@ api.post("/sort", async (c) => {
   }
 
   const images = Array.isArray(body.images) ? body.images.slice(0, MAX_PHOTOS) : [];
-  // Validate the client-supplied model against the server allowlist — an
-  // unchecked value would let anyone past the access gate bill an arbitrary or
-  // premium model to the owner's key. Unknown → undefined (pipeline default).
-  const requestedSort = typeof body.sortModel === "string" ? body.sortModel.trim() : "";
-  const sortModel = isAllowedModel(requestedSort) ? requestedSort : undefined;
   if (images.length === 0) {
     return c.json({ ok: false, error: "Please add some photos first." }, 400);
   }
 
-  let client;
+  // Validate the client-supplied {provider, model} against the server
+  // allowlist — an unchecked value would let anyone past the access gate bill
+  // an arbitrary or premium model to the owner's key. Unknown → pipeline default.
+  await ensureOpenRouterCatalogFresh();
+  const sortRef = resolveModelRef(
+    { provider: body.sortProvider, model: body.sortModel },
+    SORT_MODEL_DEFAULT,
+    { requireVision: true }
+  );
+
   try {
-    client = getClient();
+    ensureProviderConfigured(sortRef.provider);
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 500);
   }
 
   try {
-    const result = await sortPhotos(client, images, sortModel);
+    const result = await sortPhotos(images, sortRef);
     if (result.groups.length === 0) {
       return c.json(
         {
@@ -242,7 +261,7 @@ api.post("/sort", async (c) => {
     }
     return c.json({ ok: true, ...result });
   } catch (e) {
-    if (e instanceof AnthropicAuthError) {
+    if (isProviderAuthError(e)) {
       console.error("[sort] auth/billing failure:", e.message);
       return c.json({ ok: false, error: e.message }, e.status as 401 | 402 | 500);
     }
@@ -268,19 +287,19 @@ const DESCRIPTIONS: Record<string, string> = {
   "claude-haiku-4-5":  "Fastest and most affordable. Best for photo sorting only.",
 };
 
-const SORT_DEFAULT = "claude-sonnet-4-6";
-const ANALYSIS_DEFAULT = "claude-opus-4-8";
+const SORT_DEFAULT = SORT_MODEL_DEFAULT; // { provider: "anthropic", model: "claude-sonnet-4-6" }
+const ANALYSIS_DEFAULT = ANALYSIS_MODEL; // { provider: "anthropic", model: "claude-opus-4-8" }
 
 // Hardcoded fallback when the Anthropic models API call fails.
 const FALLBACK: ModelsPayload = {
   sortModels: [
-    { id: "claude-opus-4-8",   displayName: "Claude Opus 4.8",   description: DESCRIPTIONS["claude-opus-4-8"],   isDefault: false },
-    { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", description: DESCRIPTIONS["claude-sonnet-4-6"], isDefault: true  },
-    { id: "claude-haiku-4-5",  displayName: "Claude Haiku 4.5",  description: DESCRIPTIONS["claude-haiku-4-5"],  isDefault: false },
+    { provider: "anthropic", id: "claude-opus-4-8",   displayName: "Claude Opus 4.8",   description: DESCRIPTIONS["claude-opus-4-8"],   isDefault: false },
+    { provider: "anthropic", id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", description: DESCRIPTIONS["claude-sonnet-4-6"], isDefault: true  },
+    { provider: "anthropic", id: "claude-haiku-4-5",  displayName: "Claude Haiku 4.5",  description: DESCRIPTIONS["claude-haiku-4-5"],  isDefault: false },
   ],
   analysisModels: [
-    { id: "claude-opus-4-8",   displayName: "Claude Opus 4.8",   description: DESCRIPTIONS["claude-opus-4-8"],   isDefault: true  },
-    { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", description: DESCRIPTIONS["claude-sonnet-4-6"], isDefault: false },
+    { provider: "anthropic", id: "claude-opus-4-8",   displayName: "Claude Opus 4.8",   description: DESCRIPTIONS["claude-opus-4-8"],   isDefault: true  },
+    { provider: "anthropic", id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", description: DESCRIPTIONS["claude-sonnet-4-6"], isDefault: false },
   ],
 };
 
@@ -288,8 +307,9 @@ let modelsCache: ModelsPayload | null = null;
 let modelsCacheAt = 0;
 const MODELS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
-function toOption(m: ModelInfo): ModelOption {
+function toAnthropicOption(m: ModelInfo): ModelOption {
   return {
+    provider: "anthropic",
     id: m.id,
     displayName: m.display_name,
     description: DESCRIPTIONS[m.id] ?? "Model available from Anthropic.",
@@ -297,17 +317,42 @@ function toOption(m: ModelInfo): ModelOption {
   };
 }
 
-function buildModelsPayload(raw: ModelInfo[]): ModelsPayload {
-  // Only offer models the call routes will actually accept (lib/models.ts) — this
-  // keeps the premium "fable" tier out of the selector so the UI never shows a
-  // model the server would reject.
-  const vision = raw.filter((m) => isAllowedModel(m.id));
-  if (vision.length === 0) return FALLBACK;
+function toOpenRouterOption(m: OpenRouterModel): ModelOption {
+  return {
+    provider: "openrouter",
+    id: m.id,
+    displayName: m.name || m.id,
+    description: "Free via OpenRouter.",
+    isDefault: false, // set below
+  };
+}
 
-  const sortModels = vision.map((m) => ({ ...toOption(m), isDefault: m.id === SORT_DEFAULT }));
-  const analysisModels = vision
+function buildModelsPayload(anthropicRaw: ModelInfo[], openRouterRaw: OpenRouterModel[]): ModelsPayload {
+  // Only offer Anthropic models the call routes will actually accept
+  // (lib/models.ts) — keeps the premium "fable" tier out of the selector so
+  // the UI never shows a model the server would reject.
+  const anthropicVision = anthropicRaw.filter((m) => isAllowedModel(m.id));
+  // OpenRouter models are filtered to the same vision + price rules the /analyze
+  // and /sort routes enforce (lib/providers.ts), so the picker never offers a
+  // model those routes would then reject.
+  const openRouterVision = filterOpenRouterModels(openRouterRaw, { requireVision: true });
+
+  if (anthropicVision.length === 0 && openRouterVision.length === 0) return FALLBACK;
+
+  const anthropicSortOptions = anthropicVision.map((m) => toAnthropicOption(m));
+  const anthropicAnalysisOptions = anthropicVision
     .filter((m) => !ANALYSIS_EXCLUDED.test(m.id))
-    .map((m) => ({ ...toOption(m), isDefault: m.id === ANALYSIS_DEFAULT }));
+    .map((m) => toAnthropicOption(m));
+  const openRouterOptions = openRouterVision.map((m) => toOpenRouterOption(m));
+
+  const sortModels = [...anthropicSortOptions, ...openRouterOptions].map((m) => ({
+    ...m,
+    isDefault: m.provider === SORT_DEFAULT.provider && m.id === SORT_DEFAULT.model,
+  }));
+  const analysisModels = [...anthropicAnalysisOptions, ...openRouterOptions].map((m) => ({
+    ...m,
+    isDefault: m.provider === ANALYSIS_DEFAULT.provider && m.id === ANALYSIS_DEFAULT.model,
+  }));
 
   // If the default wasn't in the list, mark the first entry as default.
   if (sortModels.length && !sortModels.some((m) => m.isDefault)) sortModels[0].isDefault = true;
@@ -321,15 +366,33 @@ api.get("/models", async (c) => {
   if (modelsCache && now - modelsCacheAt < MODELS_CACHE_TTL) {
     return c.json(modelsCache);
   }
+  let anthropicModels: ModelInfo[] = [];
   try {
     const client = getClient();
     const page = await client.models.list();
-    modelsCache = buildModelsPayload(page.data);
-    modelsCacheAt = now;
-    return c.json(modelsCache);
+    anthropicModels = page.data;
   } catch {
+    // Anthropic key missing/invalid — fall through with an empty Anthropic
+    // list; OpenRouter models (if any) still populate the picker.
+  }
+
+  let openRouterModels: OpenRouterModel[] = [];
+  if (isOpenRouterConfigured()) {
+    try {
+      openRouterModels = await refreshOpenRouterCatalog();
+    } catch (e) {
+      console.warn("[models] OpenRouter catalog fetch failed:", (e as Error).message);
+    }
+  } else {
+    openRouterModels = currentOpenRouterCatalog();
+  }
+
+  if (anthropicModels.length === 0 && openRouterModels.length === 0) {
     return c.json(FALLBACK);
   }
+  modelsCache = buildModelsPayload(anthropicModels, openRouterModels);
+  modelsCacheAt = now;
+  return c.json(modelsCache);
 });
 
 // ── /api/ebay/* ───────────────────────────────────────────────────────────────

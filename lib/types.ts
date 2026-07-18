@@ -26,8 +26,11 @@ export interface AnalyzeRequestBody {
   // Browser-resized JPEG data URLs or raw base64 strings.
   images: { mediaType: string; data: string }[];
   profile: string;
-  // Optional model overrides; server falls back to its defaults when omitted.
+  // Optional model overrides; server falls back to its defaults when omitted
+  // or when the requested provider/model isn't on the server allowlist.
+  analysisProvider?: string;
   analysisModel?: string;
+  routerProvider?: string;
   routerModel?: string;
 }
 
@@ -76,6 +79,7 @@ export interface ItemGroup {
 // Shape of the /api/models response. Shared by the server route and the
 // ModelSelector UI so both agree on the model-picker payload.
 export interface ModelOption {
+  provider: "anthropic" | "openrouter";
   id: string;
   displayName: string;
   description: string;

@@ -16,6 +16,7 @@ own eBay developer keys, so you're in full control and there's no middleman.
 - 🔀 Auto-sorts them into separate items (group → verify → un-split)
 - 🏷️ Assigns bin/SKU codes so you can find items later (e.g. `K42-A`, `K42-B`)
 - 🤖 Writes a title, description, item specifics, condition, and suggested price
+- 🔀 Optionally add [OpenRouter](https://openrouter.ai/) as a second AI provider to pick free models alongside Claude — see [Environment variables](#environment-variables)
 - ✍️ Everything is editable before you post
 - 🚀 Posts straight to eBay — one item or the whole batch
 - ♻️ Refreshes stale listings — spot active items sitting 30+ days and re-list
@@ -29,6 +30,8 @@ own eBay developer keys, so you're in full control and there's no middleman.
 
 1. **An Anthropic API key** — the AI that writes listings. Get one at
    <https://console.anthropic.com/> (you pay Anthropic per use; pennies per item).
+   Optionally, also add an [OpenRouter](https://openrouter.ai/keys) key to unlock
+   free models alongside Claude — see `OPENROUTER_API_KEY` below.
 2. **An eBay developer keyset** — to post listings. Free at
    <https://developer.ebay.com/>. You'll need the **App ID**, **Cert ID**, and a
    **RuName** (explained below). *Only needed for posting — sorting and writing
@@ -213,6 +216,8 @@ It works for **both** kinds of listing:
 | Variable | Required | What it is |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key (writes the listings) |
+| `OPENROUTER_API_KEY` | optional | A second AI provider via [OpenRouter](https://openrouter.ai/keys) — one key, many models, including free vision-capable ones. When set, free OpenRouter models appear alongside Claude models in Model Settings. |
+| `OPENROUTER_MAX_PRICE_PER_M_TOKENS` | optional | Price ceiling (USD per million tokens) for OpenRouter models offered in the picker. Defaults to `0` (free only). |
 | `APP_SECRET` | ✅ for deployed apps | Access code protecting the AI endpoints so strangers can't spend your Anthropic credits. **A deployed (production) app fails closed without it** — every AI route returns an error until it's set. Asked for once per device, then remembered. Optional only for local dev. |
 | `EBAY_CLIENT_ID` | for posting | eBay App ID |
 | `EBAY_CLIENT_SECRET` | for posting | eBay Cert ID |
@@ -282,7 +287,7 @@ flowchart TD
         E["/api/ebay/*<br/>connect + publish"]
         C[["🔒 encrypted cookie<br/>(eBay refresh token)"]]
     end
-    AN["Anthropic API<br/>(your key)"]
+    AN["Anthropic API + OpenRouter<br/>(your keys)"]
     EB["eBay APIs<br/>(your developer keys)"]
 
     U -->|"all photos (thumbnails)"| S
@@ -300,6 +305,11 @@ flowchart TD
   the built SPA from a single port.
 - **`/api/sort`**: groups photos into items (AI), with verify + un-split passes.
 - **`/api/analyze`**: writes a listing for one item from its photos.
+- **`/api/models`**: lists which Claude (and, if configured, free OpenRouter)
+  models the Model Settings picker can offer for each step. `lib/providers.ts`
+  is the shared abstraction both AI routes call through — it validates any
+  client-supplied model against a server allowlist before it's ever billed to
+  your key.
 - **`/api/ebay/*`**: OAuth connect (encrypted-cookie token) + the
   inventory→offer→publish flow, with recovery for eBay's category/aspect quirks.
 - **`/api/ebay/listings`** & **`/api/ebay/refresh-listing`**: list active
@@ -316,6 +326,8 @@ flowchart TD
 ## Costs
 
 - **Anthropic**: a few cents per item (sorting + writing). You set your own key.
+- **OpenRouter** (optional): free if you stick to the free models the picker
+  offers by default (`OPENROUTER_MAX_PRICE_PER_M_TOKENS=0`).
 - **eBay**: normal eBay selling fees apply to listings you post.
 - **Hosting**: a small VPS (a few dollars a month) is plenty for personal use;
   Coolify itself is free and open source.

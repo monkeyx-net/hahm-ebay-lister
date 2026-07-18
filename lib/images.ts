@@ -14,28 +14,50 @@ function rawBase64(data: string): string {
   return data.includes(",") ? data.split(",")[1] : data;
 }
 
-export function toImageBlock(img: WireImage | undefined): ImageBlock | null {
+function validImage(img: WireImage | undefined): { mediaType: MediaType; data: string } | null {
   if (!img?.data || !ALLOWED_MEDIA.has(img.mediaType)) return null;
   const data = rawBase64(img.data);
   if (data.length * 0.75 > MAX_IMAGE_BYTES) return null;
-  return {
-    type: "image",
-    source: { type: "base64", media_type: img.mediaType as MediaType, data },
-  };
+  return { mediaType: img.mediaType as MediaType, data };
 }
 
-// Build "Photo N:" text + image content blocks for a set of images, matching
+export function isValidImage(img: WireImage | undefined): boolean {
+  return validImage(img) !== null;
+}
+
+export function toImageBlock(img: WireImage | undefined): ImageBlock | null {
+  const v = validImage(img);
+  if (!v) return null;
+  return { type: "image", source: { type: "base64", media_type: v.mediaType, data: v.data } };
+}
+
+export type OpenAIImagePart = { type: "image_url"; image_url: { url: string } };
+
+// Same image, OpenAI/OpenRouter chat-completions shape (data-URL, not a
+// separate base64 field).
+export function toOpenAIImagePart(img: WireImage | undefined): OpenAIImagePart | null {
+  const v = validImage(img);
+  if (!v) return null;
+  return { type: "image_url", image_url: { url: `data:${v.mediaType};base64,${v.data}` } };
+}
+
+// ── Provider-agnostic content parts ──────────────────────────────────────────
+// A minimal, provider-neutral content model that lib/providers.ts converts into
+// whichever shape the chosen provider's API expects, so callers (server/api.ts,
+// lib/sortPipeline.ts) don't need to know about Anthropic- or OpenAI-specific
+// content block types.
+export type GenericContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; image: WireImage };
+
+// Build "Photo N:" text + image parts for a set of images, matching
 // _images_to_content() in the Python script.
-export function labeledContent(
-  images: WireImage[],
-  labelStart = 1
-): Anthropic.ContentBlockParam[] {
-  const content: Anthropic.ContentBlockParam[] = [];
+export function labeledParts(images: WireImage[], labelStart = 1): GenericContentPart[] {
+  const parts: GenericContentPart[] = [];
   images.forEach((img, i) => {
-    const block = toImageBlock(img);
-    if (!block) return;
-    content.push({ type: "text", text: `Photo ${labelStart + i}:` });
-    content.push(block);
+    if (!isValidImage(img)) return;
+    parts.push({ type: "text", text: `Photo ${labelStart + i}:` });
+    parts.push({ type: "image", image: img });
   });
-  return content;
+  return parts;
 }

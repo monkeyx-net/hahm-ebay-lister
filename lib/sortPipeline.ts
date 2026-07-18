@@ -1,20 +1,20 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import { anthropicAuthError, parseModelJson } from "./anthropic";
+import { parseModelJson } from "./anthropic";
+import { callVisionModel, providerAuthError, type ModelRef } from "./providers";
 import {
   buildSortPrompt,
   buildVerifyGroupPrompt,
   buildVerifyMergePrompt,
   slugifyFolderName,
 } from "./prompts";
-import { labeledContent, toImageBlock, type WireImage } from "./images";
+import { isValidImage, labeledParts, type GenericContentPart, type WireImage } from "./images";
 import { mapLimit } from "./concurrency";
 
-const GROUP_MODEL = "claude-sonnet-4-6";
-const CHECK_MODEL = "claude-sonnet-4-6";
+export const SORT_MODEL_DEFAULT: ModelRef = { provider: "anthropic", model: "claude-sonnet-4-6" };
 const BATCH_SIZE = 10;
 
-// Concurrency caps — keep parallel bursts gentle so we don't trip Anthropic's
-// per-minute rate limits on big batches (which silently zeroed out sorting).
+// Concurrency caps — keep parallel bursts gentle so we don't trip the
+// provider's per-minute rate limits on big batches (which silently zeroed out
+// sorting).
 const GROUP_CONCURRENCY = 2;
 const VERIFY_CONCURRENCY = 3;
 const MERGE_CONCURRENCY = 4;
@@ -42,35 +42,24 @@ export class SortUnavailableError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function firstText(resp: Anthropic.Message): string {
-  const block = resp.content.find((b) => b.type === "text");
-  return block && block.type === "text" ? block.text.trim() : "";
-}
-
-
-// Call Claude and parse JSON, retrying transient/rate-limit errors with backoff.
-async function claudeJson<T>(
-  client: Anthropic,
-  model: string,
-  content: Anthropic.ContentBlockParam[],
+// Call the model and parse JSON, retrying transient/rate-limit errors with backoff.
+async function providerJson<T>(
+  ref: ModelRef,
+  content: GenericContentPart[],
   maxTokens: number,
   label: string
 ): Promise<T | null> {
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const resp = await client.messages.create({
-        model,
-        max_tokens: maxTokens,
-        messages: [{ role: "user", content }],
-      });
-      return parseModelJson<T>(firstText(resp));
+      const result = await callVisionModel({ ref, content, maxTokens });
+      return parseModelJson<T>(result.text);
     } catch (e) {
       const status =
         e && typeof e === "object" && "status" in e
           ? Number((e as { status?: number }).status)
           : undefined;
       // Account-level failures won't fix themselves on retry — surface them.
-      const fatal = anthropicAuthError(e);
+      const fatal = providerAuthError(e, ref.provider);
       if (fatal) throw fatal;
       const retryable = status === undefined || RETRYABLE_STATUS.has(status);
       if (attempt < 3 && retryable) {
@@ -90,9 +79,8 @@ async function claudeJson<T>(
 // The merge step (step 3) reunites any item split across a batch boundary, so
 // batches don't need sequential context — letting us parallelize safely.
 async function groupPhotos(
-  client: Anthropic,
   images: WireImage[],
-  model: string
+  ref: ModelRef
 ): Promise<{ name: string; indices: number[] }[]> {
   const total = images.length;
   const batches: { offset: number; batch: WireImage[]; labelStart: number; labelEnd: number }[] = [];
@@ -102,7 +90,7 @@ async function groupPhotos(
   }
 
   const perBatch = await mapLimit(batches, GROUP_CONCURRENCY, async (b) => {
-    const content: Anthropic.ContentBlockParam[] = [...labeledContent(b.batch, b.labelStart)];
+    const content: GenericContentPart[] = [...labeledParts(b.batch, b.labelStart)];
     const note =
       b.offset > 0
         ? ` (These are photos ${b.labelStart}–${b.labelEnd} of ${total} total. Group only the photos shown above.)`
@@ -111,9 +99,9 @@ async function groupPhotos(
       type: "text",
       text: buildSortPrompt(b.batch.length, b.labelStart, b.labelEnd, note),
     });
-    const data = await claudeJson<{
+    const data = await providerJson<{
       groups?: { folder_name?: string; photo_indices?: number[] }[];
-    }>(client, model, content, 2000, `group ${b.labelStart}-${b.labelEnd}`);
+    }>(ref, content, 2000, `group ${b.labelStart}-${b.labelEnd}`);
 
     const out: { name: string; indices: number[] }[] = [];
     for (const g of data?.groups ?? []) {
@@ -141,20 +129,18 @@ async function groupPhotos(
 
 // Step 2 — verify each multi-photo group for accidentally mixed items.
 async function verifyGroups(
-  client: Anthropic,
   images: WireImage[],
   groups: { name: string; indices: number[] }[],
-  model: string
+  ref: ModelRef
 ): Promise<{ groups: { name: string; indices: number[] }[]; orphans: number[] }> {
   const orphans: number[] = [];
 
   const checks = await mapLimit(groups, VERIFY_CONCURRENCY, async (group) => {
     if (group.indices.length === 1) return group;
-    const content = labeledContent(group.indices.map((i) => images[i]), 1);
+    const content = labeledParts(group.indices.map((i) => images[i]), 1);
     content.push({ type: "text", text: buildVerifyGroupPrompt(group.indices.length) });
-    const result = await claudeJson<{ valid?: boolean; keep_indices?: number[] }>(
-      client,
-      model,
+    const result = await providerJson<{ valid?: boolean; keep_indices?: number[] }>(
+      ref,
       content,
       300,
       `verify ${group.name}`
@@ -177,34 +163,27 @@ async function verifyGroups(
 
 // Step 3 — merge adjacent groups that are really one item split in two.
 async function mergeSplitGroups(
-  client: Anthropic,
   images: WireImage[],
   groups: { name: string; indices: number[] }[],
-  model: string
+  ref: ModelRef
 ): Promise<{ name: string; indices: number[] }[]> {
   if (groups.length < 2) return groups;
 
   const pairs = groups.slice(0, -1);
   const pairVotes = await mapLimit(pairs, MERGE_CONCURRENCY, async (group, i) => {
     const next = groups[i + 1];
-    const aBlock = toImageBlock(images[group.indices[0]]);
-    const bBlock = toImageBlock(images[next.indices[0]]);
-    if (!aBlock || !bBlock) return false;
-    const content: Anthropic.ContentBlockParam[] = [
+    const aImage = images[group.indices[0]];
+    const bImage = images[next.indices[0]];
+    if (!isValidImage(aImage) || !isValidImage(bImage)) return false;
+    const content: GenericContentPart[] = [
       { type: "text", text: "Photo 1:" },
-      aBlock,
+      { type: "image", image: aImage },
       { type: "text", text: "--- Group B ---" },
       { type: "text", text: "Photo 2:" },
-      bBlock,
+      { type: "image", image: bImage },
       { type: "text", text: buildVerifyMergePrompt(group.indices.length, next.indices.length) },
     ];
-    const result = await claudeJson<{ merge?: boolean }>(
-      client,
-      model,
-      content,
-      100,
-      `merge ${i}`
-    );
+    const result = await providerJson<{ merge?: boolean }>(ref, content, 100, `merge ${i}`);
     return result?.merge === true;
   });
 
@@ -235,14 +214,12 @@ function uniqueNames(groups: { name: string; indices: number[] }[]): SortGroup[]
 }
 
 export async function sortPhotos(
-  client: Anthropic,
   images: WireImage[],
-  model?: string
+  ref: ModelRef = SORT_MODEL_DEFAULT
 ): Promise<SortResult> {
-  const m = model ?? GROUP_MODEL;
-  const grouped = await groupPhotos(client, images, m);
+  const grouped = await groupPhotos(images, ref);
   if (grouped.length === 0) return { groups: [], orphanIndices: [] };
-  const verified = await verifyGroups(client, images, grouped, m);
-  const merged = await mergeSplitGroups(client, images, verified.groups, m);
+  const verified = await verifyGroups(images, grouped, ref);
+  const merged = await mergeSplitGroups(images, verified.groups, ref);
   return { groups: uniqueNames(merged), orphanIndices: verified.orphans };
 }

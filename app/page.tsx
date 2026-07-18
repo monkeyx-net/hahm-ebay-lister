@@ -174,13 +174,15 @@ export default function Home() {
     setSorting(true);
     setError(null);
     try {
+      const sortChoice = getSortModel();
       const res = await apiPost("/api/sort", {
         // Use the small thumbnail for sorting to keep the payload small.
         images: photos.map((p) => ({
           mediaType: p.mediaType,
           data: p.previewUrl.split(",")[1],
         })),
-        sortModel: getSortModel() ?? undefined,
+        sortProvider: sortChoice?.provider,
+        sortModel: sortChoice?.model,
       });
       const data = (await readJson(res)) as SortResponse;
       if (!data.ok || !data.groups) {
@@ -300,11 +302,15 @@ export default function Home() {
         )
       );
       try {
+        const analysisChoice = getAnalysisModel();
+        const routerChoice = getSortModel();
         const res = await apiPost("/api/analyze", {
           profile: "auto",
           images: imgs,
-          analysisModel: getAnalysisModel() ?? undefined,
-          routerModel: getSortModel() ?? undefined,
+          analysisProvider: analysisChoice?.provider,
+          analysisModel: analysisChoice?.model,
+          routerProvider: routerChoice?.provider,
+          routerModel: routerChoice?.model,
         });
         const data = (await readJson(res)) as AnalyzeResponse;
         if (!data.ok || !data.listing) {
