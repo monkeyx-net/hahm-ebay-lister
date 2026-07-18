@@ -20,38 +20,35 @@ function decode(value: string): ModelChoice | null {
   if (sep === -1) return null;
   const provider = value.slice(0, sep);
   const model = value.slice(sep + 2);
-  if ((provider !== "anthropic" && provider !== "openrouter") || !model) return null;
+  if ((provider !== "anthropic" && provider !== "openrouter" && provider !== "omniroute") || !model) {
+    return null;
+  }
   return { provider, model };
 }
 function sameChoice(a: ModelChoice | null, b: ModelOption | undefined): boolean {
   return !!a && !!b && a.provider === b.provider && a.model === b.id;
 }
 
+function OptGroup({ label, options }: { label: string; options: ModelOption[] }) {
+  if (options.length === 0) return null;
+  return (
+    <optgroup label={label}>
+      {options.map((m) => (
+        <option key={encode({ provider: m.provider, model: m.id })} value={encode({ provider: m.provider, model: m.id })}>
+          {m.displayName}
+          {m.isDefault ? " (default)" : ""}
+        </option>
+      ))}
+    </optgroup>
+  );
+}
+
 function ModelOptions({ options }: { options: ModelOption[] }) {
-  const anthropic = options.filter((m) => m.provider === "anthropic");
-  const openrouter = options.filter((m) => m.provider === "openrouter");
   return (
     <>
-      {anthropic.length > 0 && (
-        <optgroup label="Claude">
-          {anthropic.map((m) => (
-            <option key={encode({ provider: m.provider, model: m.id })} value={encode({ provider: m.provider, model: m.id })}>
-              {m.displayName}
-              {m.isDefault ? " (default)" : ""}
-            </option>
-          ))}
-        </optgroup>
-      )}
-      {openrouter.length > 0 && (
-        <optgroup label="OpenRouter (free)">
-          {openrouter.map((m) => (
-            <option key={encode({ provider: m.provider, model: m.id })} value={encode({ provider: m.provider, model: m.id })}>
-              {m.displayName}
-              {m.isDefault ? " (default)" : ""}
-            </option>
-          ))}
-        </optgroup>
-      )}
+      <OptGroup label="Claude" options={options.filter((m) => m.provider === "anthropic")} />
+      <OptGroup label="OpenRouter (free)" options={options.filter((m) => m.provider === "openrouter")} />
+      <OptGroup label="OmniRoute (self-hosted)" options={options.filter((m) => m.provider === "omniroute")} />
     </>
   );
 }

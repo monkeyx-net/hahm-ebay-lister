@@ -24,6 +24,8 @@ import {
   filterOpenRouterModels,
   isOpenRouterConfigured,
   isProviderAuthError,
+  omniRouteDisplayNames,
+  parseAllowedOmniRouteModels,
   providerAuthError,
   refreshOpenRouterCatalog,
   resolveModelRef,
@@ -327,7 +329,22 @@ function toOpenRouterOption(m: OpenRouterModel): ModelOption {
   };
 }
 
-function buildModelsPayload(anthropicRaw: ModelInfo[], openRouterRaw: OpenRouterModel[]): ModelsPayload {
+function toOmniRouteOption(id: string, names: Map<string, string>): ModelOption {
+  return {
+    provider: "omniroute",
+    id,
+    displayName: names.get(id) ?? id,
+    description: "Via OmniRoute (self-hosted).",
+    isDefault: false, // set below
+  };
+}
+
+function buildModelsPayload(
+  anthropicRaw: ModelInfo[],
+  openRouterRaw: OpenRouterModel[],
+  omniRouteIds: string[],
+  omniRouteNames: Map<string, string>
+): ModelsPayload {
   // Only offer Anthropic models the call routes will actually accept
   // (lib/models.ts) — keeps the premium "fable" tier out of the selector so
   // the UI never shows a model the server would reject.
@@ -336,20 +353,26 @@ function buildModelsPayload(anthropicRaw: ModelInfo[], openRouterRaw: OpenRouter
   // and /sort routes enforce (lib/providers.ts), so the picker never offers a
   // model those routes would then reject.
   const openRouterVision = filterOpenRouterModels(openRouterRaw, { requireVision: true });
+  // OmniRoute models are whatever the deployment owner has curated in
+  // OMNIROUTE_ALLOWED_MODELS — see lib/providers.ts for why this can't be
+  // auto-filtered the way OpenRouter's catalog is.
 
-  if (anthropicVision.length === 0 && openRouterVision.length === 0) return FALLBACK;
+  if (anthropicVision.length === 0 && openRouterVision.length === 0 && omniRouteIds.length === 0) {
+    return FALLBACK;
+  }
 
   const anthropicSortOptions = anthropicVision.map((m) => toAnthropicOption(m));
   const anthropicAnalysisOptions = anthropicVision
     .filter((m) => !ANALYSIS_EXCLUDED.test(m.id))
     .map((m) => toAnthropicOption(m));
   const openRouterOptions = openRouterVision.map((m) => toOpenRouterOption(m));
+  const omniRouteOptions = omniRouteIds.map((id) => toOmniRouteOption(id, omniRouteNames));
 
-  const sortModels = [...anthropicSortOptions, ...openRouterOptions].map((m) => ({
+  const sortModels = [...anthropicSortOptions, ...openRouterOptions, ...omniRouteOptions].map((m) => ({
     ...m,
     isDefault: m.provider === SORT_DEFAULT.provider && m.id === SORT_DEFAULT.model,
   }));
-  const analysisModels = [...anthropicAnalysisOptions, ...openRouterOptions].map((m) => ({
+  const analysisModels = [...anthropicAnalysisOptions, ...openRouterOptions, ...omniRouteOptions].map((m) => ({
     ...m,
     isDefault: m.provider === ANALYSIS_DEFAULT.provider && m.id === ANALYSIS_DEFAULT.model,
   }));
@@ -373,7 +396,7 @@ api.get("/models", async (c) => {
     anthropicModels = page.data;
   } catch {
     // Anthropic key missing/invalid — fall through with an empty Anthropic
-    // list; OpenRouter models (if any) still populate the picker.
+    // list; other providers (if configured) still populate the picker.
   }
 
   let openRouterModels: OpenRouterModel[] = [];
@@ -387,10 +410,13 @@ api.get("/models", async (c) => {
     openRouterModels = currentOpenRouterCatalog();
   }
 
-  if (anthropicModels.length === 0 && openRouterModels.length === 0) {
+  const omniRouteIds = parseAllowedOmniRouteModels();
+  const omniRouteNames = omniRouteIds.length > 0 ? await omniRouteDisplayNames() : new Map<string, string>();
+
+  if (anthropicModels.length === 0 && openRouterModels.length === 0 && omniRouteIds.length === 0) {
     return c.json(FALLBACK);
   }
-  modelsCache = buildModelsPayload(anthropicModels, openRouterModels);
+  modelsCache = buildModelsPayload(anthropicModels, openRouterModels, omniRouteIds, omniRouteNames);
   modelsCacheAt = now;
   return c.json(modelsCache);
 });

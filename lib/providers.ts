@@ -6,18 +6,23 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { getClient as getAnthropicClient, AnthropicAuthError, anthropicAuthError } from "./anthropic";
 import {
-  createChatCompletion,
+  createChatCompletion as createOpenRouterCompletion,
   getOpenRouterKey,
   listOpenRouterModels,
   OpenRouterAuthError,
   openRouterAuthError,
-  type OpenRouterContentPart,
   type OpenRouterModel,
 } from "./openrouter";
-import { toImageBlock, toOpenAIImagePart, type GenericContentPart } from "./images";
+import {
+  createChatCompletion as createOmniRouteCompletion,
+  listOmniRouteModels,
+  OmniRouteAuthError,
+  omniRouteAuthError,
+} from "./omniroute";
+import { toImageBlock, toOpenAIImagePart, type GenericContentPart, type OpenAIChatContentPart } from "./images";
 import { isAllowedModel as isAllowedAnthropicModel } from "./models";
 
-export type AiProvider = "anthropic" | "openrouter";
+export type AiProvider = "anthropic" | "openrouter" | "omniroute";
 
 export interface ModelRef {
   provider: AiProvider;
@@ -28,13 +33,30 @@ export function isOpenRouterConfigured(): boolean {
   return Boolean(process.env.OPENROUTER_API_KEY);
 }
 
+// OmniRoute has no required key — its "is this enabled" signal is whether the
+// deployment owner has curated any models (see OMNIROUTE_ALLOWED_MODELS below).
+export function isOmniRouteConfigured(): boolean {
+  return parseAllowedOmniRouteModels().length > 0;
+}
+
 // Throws a clear setup error immediately (matching each client's own message)
-// if the chosen provider's key isn't configured — call this before entering a
-// retry loop, so a missing key fails fast instead of being retried as if it
+// if the chosen provider isn't configured — call this before entering a retry
+// loop, so a missing key/config fails fast instead of being retried as if it
 // were a transient error.
 export function ensureProviderConfigured(provider: AiProvider): void {
-  if (provider === "anthropic") getAnthropicClient();
-  else getOpenRouterKey();
+  if (provider === "anthropic") {
+    getAnthropicClient();
+    return;
+  }
+  if (provider === "openrouter") {
+    getOpenRouterKey();
+    return;
+  }
+  if (!isOmniRouteConfigured()) {
+    throw new Error(
+      "OMNIROUTE_ALLOWED_MODELS is not set. Add a comma-separated list of vision-capable OmniRoute model ids to your environment variables to enable OmniRoute."
+    );
+  }
 }
 
 // ── Making the call ───────────────────────────────────────────────────────────
@@ -74,8 +96,9 @@ function toAnthropicContent(parts: GenericContentPart[]): Anthropic.ContentBlock
   return blocks;
 }
 
-function toOpenRouterContent(parts: GenericContentPart[]): OpenRouterContentPart[] {
-  const out: OpenRouterContentPart[] = [];
+// Shared by every OpenAI-compatible provider (OpenRouter, OmniRoute, ...).
+function toOpenAIChatContent(parts: GenericContentPart[]): OpenAIChatContentPart[] {
+  const out: OpenAIChatContentPart[] = [];
   for (const p of parts) {
     if (p.type === "text") {
       out.push({ type: "text", text: p.text });
@@ -119,22 +142,28 @@ export async function callVisionModel(opts: VisionCallOptions): Promise<VisionCa
     };
   }
 
-  return createChatCompletion({
-    model: opts.ref.model,
-    system: opts.system,
-    content: toOpenRouterContent(opts.content),
-    maxTokens: opts.maxTokens,
-  });
+  const content = toOpenAIChatContent(opts.content);
+  if (opts.ref.provider === "openrouter") {
+    return createOpenRouterCompletion({ model: opts.ref.model, system: opts.system, content, maxTokens: opts.maxTokens });
+  }
+  return createOmniRouteCompletion({ model: opts.ref.model, system: opts.system, content, maxTokens: opts.maxTokens });
 }
 
 // ── Account-level failures, provider-agnostic ────────────────────────────────
 
-export function providerAuthError(e: unknown, provider: AiProvider): AnthropicAuthError | OpenRouterAuthError | null {
-  return provider === "anthropic" ? anthropicAuthError(e) : openRouterAuthError(e);
+export function providerAuthError(
+  e: unknown,
+  provider: AiProvider
+): AnthropicAuthError | OpenRouterAuthError | OmniRouteAuthError | null {
+  if (provider === "anthropic") return anthropicAuthError(e);
+  if (provider === "openrouter") return openRouterAuthError(e);
+  return omniRouteAuthError(e);
 }
 
-export function isProviderAuthError(e: unknown): e is AnthropicAuthError | OpenRouterAuthError {
-  return e instanceof AnthropicAuthError || e instanceof OpenRouterAuthError;
+export function isProviderAuthError(
+  e: unknown
+): e is AnthropicAuthError | OpenRouterAuthError | OmniRouteAuthError {
+  return e instanceof AnthropicAuthError || e instanceof OpenRouterAuthError || e instanceof OmniRouteAuthError;
 }
 
 // ── OpenRouter catalog + allowlist ────────────────────────────────────────────
@@ -201,9 +230,25 @@ function allowedOpenRouterModelIds(requireVision: boolean): Set<string> {
   return new Set(filterOpenRouterModels(openRouterCatalog, { requireVision }).map((m) => m.id));
 }
 
-// Fails closed: a model id that isn't in the last successfully fetched +
-// filtered OpenRouter catalog is rejected — including before the first fetch
-// ever completes, when the catalog is still empty.
+// ── OmniRoute allowlist ───────────────────────────────────────────────────────
+// OmniRoute aggregates 250+ heterogeneous providers behind one OpenAI-compatible
+// API, and its /v1/models response doesn't reliably expose vision-capability or
+// pricing metadata the way OpenRouter's does — so we can't safely auto-filter
+// like we do for OpenRouter above. Instead, the deployment owner explicitly
+// lists the OmniRoute model ids they've verified support vision, via
+// OMNIROUTE_ALLOWED_MODELS (comma-separated). Nothing is offered until they do.
+export function parseAllowedOmniRouteModels(): string[] {
+  const raw = process.env.OMNIROUTE_ALLOWED_MODELS ?? "";
+  return Array.from(new Set(raw.split(",").map((s) => s.trim()).filter(Boolean)));
+}
+
+function allowedOmniRouteModelIds(): Set<string> {
+  return new Set(parseAllowedOmniRouteModels());
+}
+
+// Fails closed: a model id that isn't in the relevant provider's trusted
+// allowlist is rejected — including before an OpenRouter catalog fetch ever
+// completes (empty catalog) or when OMNIROUTE_ALLOWED_MODELS is unset.
 export function isAllowedModelRef(ref: unknown, opts: { requireVision: boolean }): ref is ModelRef {
   if (!ref || typeof ref !== "object") return false;
   const provider = (ref as { provider?: unknown }).provider;
@@ -211,6 +256,7 @@ export function isAllowedModelRef(ref: unknown, opts: { requireVision: boolean }
   if (typeof model !== "string" || model.length === 0 || model.length > MAX_MODEL_ID_LEN) return false;
   if (provider === "anthropic") return isAllowedAnthropicModel(model);
   if (provider === "openrouter") return allowedOpenRouterModelIds(opts.requireVision).has(model);
+  if (provider === "omniroute") return allowedOmniRouteModelIds().has(model);
   return false;
 }
 
@@ -223,4 +269,17 @@ export function resolveModelRef(
     return { provider: requested.provider, model: requested.model };
   }
   return fallback;
+}
+
+// Best-effort display names for the curated OmniRoute allowlist. Never throws
+// — /api/models falls back to showing the raw model id if OmniRoute is
+// unreachable, since the allowlist itself (not this) is what makes a model
+// usable.
+export async function omniRouteDisplayNames(): Promise<Map<string, string>> {
+  try {
+    const models = await listOmniRouteModels();
+    return new Map(models.map((m) => [m.id, m.name || m.id]));
+  } catch {
+    return new Map();
+  }
 }

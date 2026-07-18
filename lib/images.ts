@@ -33,12 +33,25 @@ export function toImageBlock(img: WireImage | undefined): ImageBlock | null {
 
 export type OpenAIImagePart = { type: "image_url"; image_url: { url: string } };
 
-// Same image, OpenAI/OpenRouter chat-completions shape (data-URL, not a
-// separate base64 field).
+// Same image, OpenAI-compatible chat-completions shape (data-URL, not a
+// separate base64 field) — shared by every OpenAI-compatible provider
+// (OpenRouter, OmniRoute, ...).
 export function toOpenAIImagePart(img: WireImage | undefined): OpenAIImagePart | null {
   const v = validImage(img);
   if (!v) return null;
   return { type: "image_url", image_url: { url: `data:${v.mediaType};base64,${v.data}` } };
+}
+
+// Chat-completions content-part shape shared by every OpenAI-compatible
+// provider this app talks to.
+export type OpenAIChatContentPart = { type: "text"; text: string } | OpenAIImagePart;
+
+// Chat-completions result shape shared by every OpenAI-compatible provider
+// (OpenRouter, OmniRoute, ...) — kept minimal since none of them expose
+// Anthropic's prompt-caching usage fields.
+export interface OpenAIChatResult {
+  text: string;
+  usage: { input_tokens: number; output_tokens: number };
 }
 
 // ── Provider-agnostic content parts ──────────────────────────────────────────

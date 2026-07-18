@@ -2,6 +2,8 @@
 // SDK we already depend on, so this talks to its OpenAI-compatible REST API
 // directly with fetch (same convention as lib/ebay/*.ts).
 
+import type { OpenAIChatContentPart, OpenAIChatResult } from "./images";
+
 const BASE_URL = "https://openrouter.ai/api/v1";
 
 export function getOpenRouterKey(): string {
@@ -25,14 +27,9 @@ function authHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-export type OpenRouterContentPart =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
-
-export interface ChatCompletionResult {
-  text: string;
-  usage: { input_tokens: number; output_tokens: number };
-}
+// Kept as named aliases for readability at OpenRouter call sites.
+export type OpenRouterContentPart = OpenAIChatContentPart;
+export type ChatCompletionResult = OpenAIChatResult;
 
 // ── Account-level OpenRouter failures ────────────────────────────────────────
 // Mirrors AnthropicAuthError: a bad/missing key or exhausted credits fails

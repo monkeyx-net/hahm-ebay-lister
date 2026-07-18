@@ -79,7 +79,7 @@ export interface ItemGroup {
 // Shape of the /api/models response. Shared by the server route and the
 // ModelSelector UI so both agree on the model-picker payload.
 export interface ModelOption {
-  provider: "anthropic" | "openrouter";
+  provider: "anthropic" | "openrouter" | "omniroute";
   id: string;
   displayName: string;
   description: string;
