@@ -15,3 +15,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+networks:
+  # Pin the bridge to a stable interface name so firewalld rules keep matching it.
+  # With firewalld active, a container can reach the internet (Docker's own iptables
+  # FORWARD/NAT rules) but NOT host services (e.g. an OmniRoute gateway on the host)
+  # unless its bridge is in the ACCEPT "docker" firewalld zone. Docker does not
+  # reliably add new bridges to that zone here, and a random br-<id> changes every
+  # time the network is recreated — so pin the name and add it once, permanently:
+  #   sudo firewall-cmd --permanent --zone=docker --change-interface=ebaylister0
+  #   sudo firewall-cmd --zone=docker --change-interface=ebaylister0   # apply now
+  # See .env.example for the OMNIROUTE_BASE_URL / host.docker.internal note.
+  default:
+    driver_opts:
+      com.docker.network.bridge.name: ebaylister0
