@@ -85,7 +85,9 @@ export async function createChatCompletion(opts: {
   const resp = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: authHeaders(apiKey),
-    body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, messages }),
+    // Explicitly non-streamed: we read the whole completion at once via
+    // resp.json() below, so never let the server return a streaming SSE body.
+    body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, stream: false, messages }),
     // A hung/unreachable OpenRouter must not hang the request forever — the
     // retry loops in server/api.ts and lib/sortPipeline.ts expect a call to
     // fail within a bounded time so they can back off and retry.

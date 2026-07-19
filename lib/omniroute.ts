@@ -70,7 +70,11 @@ export async function createChatCompletion(opts: {
   const resp = await fetch(`${getOmniRouteBaseUrl()}/chat/completions`, {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, messages }),
+    // stream:false is required, not optional: some OmniRoute builds (e.g. 3.8.x)
+    // default to a streaming SSE response when `stream` is omitted, which
+    // resp.json() below can't parse. We read the whole completion at once, so
+    // always ask for a single non-streamed JSON body.
+    body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, stream: false, messages }),
     // A hung/unreachable local gateway must not hang the request forever —
     // the retry loops in server/api.ts and lib/sortPipeline.ts expect a call
     // to fail within a bounded time so they can back off and retry.
