@@ -123,7 +123,12 @@ export function ListingCard({
 
   const specifics = useMemo(() => {
     const entries = Object.entries(listing?.item_specifics ?? {});
-    return entries.filter(([k, v]) => v && v.trim() !== "" && !k.startsWith("---"));
+    // Values come from model output, so they aren't guaranteed to be strings —
+    // some providers return numbers/arrays. Coerce before trimming/rendering so a
+    // non-string value can't crash the card (el.trim is not a function → blank screen).
+    return entries
+      .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v ?? "")] as [string, string])
+      .filter(([k, v]) => v.trim() !== "" && !k.startsWith("---"));
   }, [listing?.item_specifics]);
 
   const titleLen = listing?.title?.length ?? 0;
