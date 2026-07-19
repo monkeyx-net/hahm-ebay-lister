@@ -7,4 +7,11 @@ services:
       - .env.local
     environment:
       - NODE_ENV=production
+    # Let the container reach services running on the host (e.g. an OmniRoute
+    # gateway on the host's :20128). Inside the container "localhost" is the
+    # container itself, so a host service must be addressed via
+    # host.docker.internal — set OMNIROUTE_BASE_URL=http://host.docker.internal:20128/v1
+    # in .env.local. On Linux this hostname only resolves with the mapping below.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
