@@ -96,6 +96,12 @@ export function ListingCard({
   const [compsBusy, setCompsBusy] = useState(false);
   const [compsMsg, setCompsMsg] = useState<string | null>(null);
 
+  // The server now fetches comps during analysis and attaches them to the
+  // listing, so show them without making the seller click "eBay comps" first.
+  useEffect(() => {
+    if (listing?.comps) setComps(listing.comps);
+  }, [listing?.comps]);
+
   const checkComps = async () => {
     const query =
       listing?.title?.trim() ||
@@ -190,6 +196,16 @@ export function ListingCard({
   const readOnlySpecifics = specifics.filter(([k]) => !requiredNames.has(k.toLowerCase()));
 
   const titleLen = listing?.title?.length ?? 0;
+
+  // The server pulls an over-market price guess toward the comps median. Surface
+  // what happened so the seller understands it (and can revert to the raw guess).
+  const llmPriceNum =
+    listing?.llm_price !== undefined ? parseFloat(String(listing.llm_price)) : NaN;
+  const overMarket =
+    listing?.price_source === "blended" ||
+    (!!listing?.comps &&
+      !Number.isNaN(llmPriceNum) &&
+      llmPriceNum > listing.comps.high);
 
   // eBay's size standardization blocks apparel/footwear listings that are
   // missing a Size, so flag those for the seller before they post.
@@ -322,11 +338,42 @@ export function ListingCard({
                       >
                         Use median
                       </button>
+                      {overMarket && listing.llm_price !== undefined && (
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          onClick={() =>
+                            onEdit(group.id, {
+                              suggested_price: listing.llm_price,
+                            })
+                          }
+                          title="Revert to the model's original price guess"
+                        >
+                          Use first guess
+                        </button>
+                      )}
                     </span>
                   )}
                   {compsMsg && (
                     <span style={{ color: "var(--color-danger)" }}>{compsMsg}</span>
                   )}
+                </div>
+              )}
+              {ebayConfigured && overMarket && listing.comps && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontSize: "0.8em",
+                    color: "var(--color-warning, #b26a00)",
+                  }}
+                >
+                  ⚠ First guess{" "}
+                  {formatPrice(listing.llm_price, market.currencySymbol)} was above
+                  market ({formatPrice(listing.comps.low, market.currencySymbol)}–
+                  {formatPrice(listing.comps.high, market.currencySymbol)})
+                  {listing.price_source === "blended"
+                    ? "; adjusted toward the median."
+                    : " — consider using the median."}
                 </div>
               )}
             </div>

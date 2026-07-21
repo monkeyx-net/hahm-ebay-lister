@@ -11,16 +11,11 @@
 
 import { EBAY_MARKETPLACE_ID, EBAY_CURRENCY, EBAY_LOCALE } from "./config";
 import { appToken } from "./taxonomy";
+import type { CompsResult } from "../types";
+
+export type { CompsResult };
 
 const EBAY_BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
-
-export interface CompsResult {
-  count: number; // how many comparable listings the figures are based on
-  low: number;
-  high: number;
-  median: number;
-  currency: string;
-}
 
 function median(nums: number[]): number {
   const s = [...nums].sort((a, b) => a - b);
@@ -94,5 +89,54 @@ export async function fetchActiveComps(query: string): Promise<CompsResult | nul
     high: round2(Math.max(...used)),
     median: round2(median(used)),
     currency: EBAY_CURRENCY,
+  };
+}
+
+// ── Price reconciliation ─────────────────────────────────────────────────────
+// The model's suggested_price is a guess from the photos and tends to run high.
+// When we have real comps, pull an over-market guess back toward reality — but
+// only when it's *wildly* high, and never fully discard the model's signal.
+
+const MIN_COMPS = 3; // ignore thin/noisy comp sets — trust the model instead
+const SOLD_DISCOUNT = 0.9; // active asking prices overstate real sold value
+const OVERSHOOT = 1.5; // only intervene when the guess exceeds market by this much
+const BLEND_W = 0.65; // weight on the market anchor when we do intervene
+
+export interface Reconciled {
+  suggested_price: number | string;
+  llm_price: number | string;
+  price_source: "llm" | "blended";
+}
+
+// Pure: no I/O. Decides the default price from the model's guess + comps.
+export function reconcilePrice(
+  rawLlm: number | string | undefined,
+  comps: CompsResult | null
+): Reconciled {
+  const raw = rawLlm ?? "";
+  const llm = typeof raw === "string" ? parseFloat(raw) : raw;
+
+  // No usable guess, or no trustworthy market signal → keep the model's value.
+  if (!llm || Number.isNaN(llm) || llm <= 0) {
+    return { suggested_price: raw, llm_price: raw, price_source: "llm" };
+  }
+  if (!comps || comps.count < MIN_COMPS) {
+    return { suggested_price: raw, llm_price: raw, price_source: "llm" };
+  }
+
+  const anchor = comps.median * SOLD_DISCOUNT;
+
+  // Within a believable band of the market → trust the model's judgement.
+  if (llm <= anchor * OVERSHOOT) {
+    return { suggested_price: raw, llm_price: raw, price_source: "llm" };
+  }
+
+  // Wildly high → blend toward the anchor (keep 1-BLEND_W of the guess) and clamp
+  // to the top of the observed active range so we never exceed a real listing.
+  const blended = round2(BLEND_W * anchor + (1 - BLEND_W) * llm);
+  return {
+    suggested_price: Math.min(blended, comps.high),
+    llm_price: raw,
+    price_source: "blended",
   };
 }

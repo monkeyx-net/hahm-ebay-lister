@@ -1,6 +1,17 @@
 // Shape of a generated listing. Mirrors the JSON the model returns in the
 // Python script's analyze_photos(), plus the routed profile.
 
+// Median/range of comparable active eBay listings, from the Browse API. Lives
+// here (not in lib/ebay/pricing.ts) so it can ride on ListingResult and be shared
+// by client and server; pricing.ts imports it as a type.
+export interface CompsResult {
+  count: number; // how many comparable listings the figures are based on
+  low: number;
+  high: number;
+  median: number;
+  currency: string;
+}
+
 export interface ListingResult {
   title: string;
   category?: string;
@@ -15,7 +26,12 @@ export interface ListingResult {
   condition_notes?: string;
   measurements?: string;
   description: string;
+  // The default price the seller sees. When comps ground it below the model's raw
+  // guess, this is the reconciled value and llm_price holds the original.
   suggested_price?: number | string;
+  llm_price?: number | string; // the model's raw guess, preserved for revert
+  comps?: CompsResult | null; // active-listing market signal used to reconcile
+  price_source?: "llm" | "blended"; // what produced suggested_price
   seo_keywords?: string[];
   key_features?: string[];
   item_specifics?: Record<string, string>;

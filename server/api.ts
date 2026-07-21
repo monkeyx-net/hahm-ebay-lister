@@ -35,7 +35,7 @@ import {
 import { sortPhotos, SortUnavailableError, SORT_MODEL_DEFAULT } from "../lib/sortPipeline";
 import { isEbayConfigured, currencySymbol, EBAY_ITEM_BASE_URL } from "../lib/ebay/config";
 import { buildAuthorizeUrl, exchangeCode } from "../lib/ebay/oauth";
-import { fetchActiveComps } from "../lib/ebay/pricing";
+import { fetchActiveComps, reconcilePrice, type CompsResult } from "../lib/ebay/pricing";
 import {
   EBAY_COOKIE,
   EBAY_COOKIE_MAX_AGE,
@@ -205,6 +205,28 @@ api.post("/analyze", async (c) => {
         // Fold "No Brand"/"None"/"N/A"/… to eBay's canonical "Unbranded" so the
         // Brand field doesn't show (or submit) a value eBay rejects on publish.
         if (listing.brand) listing.brand = normalizeBrand(listing.brand);
+
+        // Ground the model's price guess in real market data. Fetch comparable
+        // active listings (same query the review card uses) and pull an
+        // over-market guess back toward the median — the model tends to run high.
+        // A comps failure must never break analyze, so it degrades to the raw guess.
+        const compsQuery =
+          listing.title?.trim() ||
+          [listing.brand, listing.item_type].filter(Boolean).join(" ").trim();
+        let comps: CompsResult | null = null;
+        if (isEbayConfigured() && compsQuery) {
+          try {
+            comps = await fetchActiveComps(compsQuery);
+          } catch (err) {
+            console.warn("[analyze] comps lookup failed:", (err as Error).message);
+            comps = null;
+          }
+        }
+        const rec = reconcilePrice(listing.suggested_price, comps);
+        listing.suggested_price = rec.suggested_price;
+        listing.llm_price = rec.llm_price;
+        listing.price_source = rec.price_source;
+        listing.comps = comps;
         return c.json({ ok: true, listing });
       } catch (err) {
         const fatal = providerAuthError(err, analysisRef.provider);
