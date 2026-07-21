@@ -290,6 +290,16 @@ function resolveCategory(listing: ListingResult): {
   return { categoryId, fallbacks };
 }
 
+// The eBay leaf category this listing will publish to. Mirrors the resolution in
+// publishListing() (Taxonomy suggestion first, static map as fallback) so the
+// review UI can ask /api/ebay/aspects for the SAME category's required specifics
+// the publish path will enforce.
+export async function resolveLeafCategoryId(listing: ListingResult): Promise<string> {
+  const { categoryId: staticCat } = resolveCategory(listing);
+  const leaf = await suggestLeafCategory(`${listing.category_hint || ""} ${listing.title || ""}`);
+  return leaf || staticCat;
+}
+
 // eBay rejects any item-specific (aspect) value longer than this (error 25002).
 const MAX_ASPECT_VALUE_LEN = 65;
 
@@ -328,6 +338,19 @@ function departmentForCategory(catKey: string): string {
   return "Unisex Adult";
 }
 
+// eBay's canonical "no brand" value is "Unbranded". The model (and sellers typing
+// into the Brand field) write it many ways — "No Brand", "None", "N/A", "Generic",
+// "Unknown" — several of which eBay rejects as an invalid Brand value on submit.
+// Fold all of them to "Unbranded"; leave a real brand untouched, and "" as "".
+const NO_BRAND_RE =
+  /^(unbranded|no[\s-]*brand(\s*name)?|no\s+visible\s+brand|brand\s*(unknown|less)|none|n\/?a|not\s+applicable|does\s+not\s+apply|generic|unknown|unmarked|no\s+label)$/i;
+
+export function normalizeBrand(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  return NO_BRAND_RE.test(s) ? "Unbranded" : s;
+}
+
 // Build the item-specifics (aspects) map from the listing.
 function buildAspects(listing: ListingResult, catKey: string): Record<string, string[]> {
   const aspects: Record<string, string[]> = {};
@@ -336,7 +359,7 @@ function buildAspects(listing: ListingResult, catKey: string): Record<string, st
     if (val) aspects[k] = [val];
   };
 
-  put("Brand", String(listing.brand || "").trim());
+  put("Brand", normalizeBrand(listing.brand));
   put("Size", cleanSize(listing.size));
   put("Color", singleValue(listing.color));
   put("Material", singleValue(listing.material));
@@ -406,11 +429,25 @@ function pickDepartment(allowed: string[], listing: ListingResult, catKey: strin
   return allowed[0] || "";
 }
 
+// eBay's canonical "this attribute doesn't apply" sentinel. It's the right
+// default for Model/MPN on generic second-hand goods: "Unbranded" is only a valid
+// Brand value — Model/MPN reject it and 25002-fail ("Model is missing, enter a
+// valid value"), whereas "Does Not Apply" is accepted.
+const DOES_NOT_APPLY = "Does Not Apply";
+
+// Model-type aspects (Model, MPN, Manufacturer Part Number) that should fall back
+// to "Does Not Apply" rather than a brand-style default when the listing has none.
+function isModelAspect(name: string): boolean {
+  const n = (name || "").toLowerCase();
+  return n.includes("model") || n === "mpn" || n.includes("manufacturer part");
+}
+
 // Best free-text fill for a required aspect we don't already have, drawn from
 // the listing itself. eBay accepts any string for FREE_TEXT aspects.
 function freeTextDefault(name: string, listing: ListingResult): string {
   const n = name.toLowerCase();
-  if (n.includes("brand")) return String(listing.brand || "").trim() || "Unbranded";
+  if (n.includes("brand")) return normalizeBrand(listing.brand) || "Unbranded";
+  if (isModelAspect(name)) return DOES_NOT_APPLY;
   if (n.includes("color")) return singleValue(listing.color) || "Multicolor";
   if (n.includes("shoe size") || n === "size") return cleanSize(listing.size);
   if (n.includes("material")) return singleValue(listing.material) || "Man Made";
@@ -564,20 +601,77 @@ function extractMissingAspects(r: EbayResp): string[] {
   return missing;
 }
 
+// Pick a value eBay will actually accept for a required aspect we can't fill from
+// the listing. For SELECTION_ONLY aspects this MUST come from eBay's own allowed
+// list — a free-text sentinel like "Does Not Apply"/"Unbranded" 25002-fails as an
+// invalid value (this is why "Connectivity is missing" kept recurring). We prefer
+// a "does not apply"/"none"/"other"-style option when the category offers one.
+function defaultForMissingAspect(
+  field: string,
+  listing: ListingResult,
+  meta: AspectMeta[]
+): string {
+  const m = meta.find((a) => a.name.toLowerCase() === field.toLowerCase());
+  if (m && m.mode === "SELECTION_ONLY" && m.values.length) {
+    const pref = m.values.find((v) =>
+      /does not apply|not applicable|\bn\/?a\b|\bnone\b|\bother\b|unbranded/i.test(v)
+    );
+    return pref || m.values[0];
+  }
+  // FREE_TEXT (or unknown category metadata): eBay accepts any string, so use a
+  // listing-derived value if we have one, else a sensible sentinel — "Unbranded"
+  // reads right only for Brand; everything else gets "Does Not Apply".
+  const fromListing = freeTextDefault(field, listing);
+  if (fromListing) return fromListing;
+  if (ASPECT_DEFAULTS[field]) return ASPECT_DEFAULTS[field];
+  return field.toLowerCase().includes("brand") ? "Unbranded" : DOES_NOT_APPLY;
+}
+
 function addMissingAspects(
   aspects: Record<string, string[]>,
-  missing: string[]
+  missing: string[],
+  listing: ListingResult,
+  meta: AspectMeta[]
 ): string[] {
   const added: string[] = [];
   for (const field of missing) {
     // Never stamp a default into a size aspect — let eBay's "missing item
     // specific" error surface so the seller supplies the real size.
     if (isSizeAspect(field)) continue;
-    const def = ASPECT_DEFAULTS[field] || "Unbranded";
+    // If we already stamped this one and eBay still reports it missing, our value
+    // was rejected as invalid — don't re-stamp the same thing and loop forever.
+    if (aspects[field]?.length) continue;
+    const def = defaultForMissingAspect(field, listing, meta);
+    if (!def) continue;
     aspects[field] = [def];
     added.push(`${field}=${def}`);
   }
   return added;
+}
+
+// Resolve a cascade of missing/invalid required aspects. eBay often reports them
+// one at a time, so we loop (bounded): stamp valid values, rewrite the inventory
+// item via `reattempt`, and repeat until the call succeeds or we stop making
+// progress. `reattempt` re-runs whatever failed (the PUT, or a PUT + offer/publish).
+async function recoverMissingAspects(
+  r: EbayResp,
+  ctx: {
+    aspects: Record<string, string[]>;
+    listing: ListingResult;
+    meta: AspectMeta[];
+    inventoryItem: any;
+    reattempt: () => Promise<EbayResp>;
+    ok: (resp: EbayResp) => boolean;
+  }
+): Promise<EbayResp> {
+  for (let round = 0; round < 6 && !ctx.ok(r); round++) {
+    const missing = extractMissingAspects(r);
+    if (!missing.length) break;
+    if (!addMissingAspects(ctx.aspects, missing, ctx.listing, ctx.meta).length) break;
+    ctx.inventoryItem.product.aspects = ctx.aspects;
+    r = await ctx.reattempt();
+  }
+  return r;
 }
 
 function updateOfferBody(offer: Record<string, unknown>): Record<string, unknown> {
@@ -794,18 +888,18 @@ export async function publishListing(
   const aspects = buildAspects(listing, catKey);
   // Ask eBay (in parallel) for the leaf category's REQUIRED specifics and its
   // accepted condition ids, then make both valid before creating the item.
-  // Non-fatal: the recovery loops below remain as a backup if eBay is slow.
+  // Settle independently: a failure fetching condition ids must NOT skip aspect
+  // reconciliation (that's how required aspects like Connectivity slipped through
+  // and 25002-failed at publish). Non-fatal — the recovery loops below back it up.
+  let aspectMeta: AspectMeta[] = [];
   let acceptedConds = new Set<number>();
-  try {
-    const [meta, conds] = await Promise.all([
-      categoryAspects(catId), // required aspects + valid values  → fixes 25002
-      acceptedConditionIds(catId), // accepted condition ids       → fixes 25021
-    ]);
-    if (meta.length) reconcileAspects(aspects, meta, listing, catKey);
-    acceptedConds = conds;
-  } catch {
-    /* taxonomy/metadata unavailable — proceed with best-effort values */
-  }
+  const [metaRes, condsRes] = await Promise.allSettled([
+    categoryAspects(catId), // required aspects + valid values  → fixes 25002
+    acceptedConditionIds(catId), // accepted condition ids       → fixes 25021
+  ]);
+  if (metaRes.status === "fulfilled") aspectMeta = metaRes.value;
+  if (condsRes.status === "fulfilled") acceptedConds = condsRes.value;
+  if (aspectMeta.length) reconcileAspects(aspects, aspectMeta, listing, catKey);
   const condCandidates = conditionCandidates(listing.condition, acceptedConds);
   const condition = condCandidates[0] || "USED_EXCELLENT";
   const inventoryItem: any = {
@@ -835,11 +929,14 @@ export async function publishListing(
 
   let r = await putInventory();
   if (![200, 201, 204].includes(r.status)) {
-    const missing = extractMissingAspects(r);
-    if (missing.length && addMissingAspects(aspects, missing).length) {
-      inventoryItem.product.aspects = aspects;
-      r = await putInventory();
-    }
+    r = await recoverMissingAspects(r, {
+      aspects,
+      listing,
+      meta: aspectMeta,
+      inventoryItem,
+      reattempt: putInventory,
+      ok: (x) => [200, 201, 204].includes(x.status),
+    });
     // Recovery: condition invalid for this category (25021/25059) → step down
     // to a grade the category accepts.
     if (
@@ -899,11 +996,17 @@ export async function publishListing(
 
   // Recovery: missing aspects during offer create.
   if (![200, 201].includes(r.status) && extractMissingAspects(r).length) {
-    if (addMissingAspects(aspects, extractMissingAspects(r)).length) {
-      inventoryItem.product.aspects = aspects;
-      await putInventory();
-      r = await postOffer();
-    }
+    r = await recoverMissingAspects(r, {
+      aspects,
+      listing,
+      meta: aspectMeta,
+      inventoryItem,
+      reattempt: async () => {
+        await putInventory();
+        return postOffer();
+      },
+      ok: (x) => [200, 201].includes(x.status),
+    });
   }
   // Recovery: non-leaf category (25005).
   if (![200, 201].includes(r.status) && errorIds(r).includes(25005)) {
@@ -926,15 +1029,33 @@ export async function publishListing(
       return { success: false, sku, error: publishErrorMessage("Offer creation failed", r) };
     }
     // Update the pre-existing offer instead.
-    const upd = await withTransientRetry(
-      () =>
-        ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/offer/${existing}`, {
-          body: updateOfferBody(offerBody),
-          extraHeaders: CL,
-        }),
-      "offer update",
-      sku
-    );
+    const putOfferUpdate = () =>
+      withTransientRetry(
+        () =>
+          ebayRequest(accessToken, "PUT", `${EBAY_INV_BASE}/offer/${existing}`, {
+            body: updateOfferBody(offerBody),
+            extraHeaders: CL,
+          }),
+        "offer update",
+        sku
+      );
+    let upd = await putOfferUpdate();
+    // eBay validates the inventory item's aspects on offer update too, so a
+    // required specific (e.g. Item Height) can surface here — run the same
+    // missing-aspect recovery the create/publish paths use.
+    if (![200, 201, 204].includes(upd.status) && extractMissingAspects(upd).length) {
+      upd = await recoverMissingAspects(upd, {
+        aspects,
+        listing,
+        meta: aspectMeta,
+        inventoryItem,
+        reattempt: async () => {
+          await putInventory();
+          return putOfferUpdate();
+        },
+        ok: (x) => [200, 201, 204].includes(x.status),
+      });
+    }
     if (![200, 201, 204].includes(upd.status)) {
       logPublishFailure("offer update", sku, upd);
       return { success: false, sku, error: publishErrorMessage("Offer update failed", upd) };
@@ -953,7 +1074,9 @@ export async function publishListing(
     offerId,
     catId,
     catKey,
+    listing,
     aspects,
+    aspectMeta,
     inventoryItem,
     offerBody,
     fallbacks,
@@ -968,7 +1091,9 @@ async function publishOfferWithRecovery(
     offerId: string;
     catId: string;
     catKey: string;
+    listing: ListingResult;
     aspects: Record<string, string[]>;
+    aspectMeta: AspectMeta[];
     inventoryItem: any;
     offerBody: any;
     fallbacks: string[];
@@ -1002,11 +1127,18 @@ async function publishOfferWithRecovery(
   let eids = errorIds(r);
 
   // Recovery: missing item specifics.
-  const missing = extractMissingAspects(r);
-  if (missing.length && addMissingAspects(ctx.aspects, missing).length) {
-    ctx.inventoryItem.product.aspects = ctx.aspects;
-    await putInventory();
-    r = await doPublish();
+  if (extractMissingAspects(r).length) {
+    r = await recoverMissingAspects(r, {
+      aspects: ctx.aspects,
+      listing: ctx.listing,
+      meta: ctx.aspectMeta,
+      inventoryItem: ctx.inventoryItem,
+      reattempt: async () => {
+        await putInventory();
+        return doPublish();
+      },
+      ok: (x) => x.ok,
+    });
     if (r.ok) return { success: true, sku, offerId, listingId: r.json?.listingId || "" };
     eids = errorIds(r);
   }

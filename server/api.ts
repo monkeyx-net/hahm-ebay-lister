@@ -45,7 +45,14 @@ import {
   openConnection,
   sealConnection,
 } from "../lib/ebay/session";
-import { fetchAccountSetup, publishListing, clearAccountSetupCache } from "../lib/ebay/publish";
+import {
+  fetchAccountSetup,
+  publishListing,
+  clearAccountSetupCache,
+  normalizeBrand,
+  resolveLeafCategoryId,
+} from "../lib/ebay/publish";
+import { categoryAspects } from "../lib/ebay/taxonomy";
 import type { PublishInput } from "../lib/ebay/publish";
 import { fetchActiveListings } from "../lib/ebay/sellerListings";
 import { refreshListing } from "../lib/ebay/refresh";
@@ -195,6 +202,9 @@ api.post("/analyze", async (c) => {
         );
         const listing = parseModelJson<ListingResult>(result.text);
         listing.item_profile = profile;
+        // Fold "No Brand"/"None"/"N/A"/… to eBay's canonical "Unbranded" so the
+        // Brand field doesn't show (or submit) a value eBay rejects on publish.
+        if (listing.brand) listing.brand = normalizeBrand(listing.brand);
         return c.json({ ok: true, listing });
       } catch (err) {
         const fatal = providerAuthError(err, analysisRef.provider);
@@ -306,9 +316,25 @@ const FALLBACK: ModelsPayload = {
   ],
 };
 
+// Known-good Anthropic models to show while a live models.list() call is failing,
+// so an Anthropic outage degrades to "Claude + whatever else is up" instead of an
+// OmniRoute-only picker. Derived from FALLBACK (all Anthropic, all pass the
+// isAllowedModel allowlist) and shaped as ModelInfo so buildModelsPayload can
+// treat them like a live response.
+const ANTHROPIC_FALLBACK_MODELS: ModelInfo[] = FALLBACK.sortModels.map((m) => ({
+  type: "model",
+  id: m.id,
+  display_name: m.displayName,
+  created_at: new Date(0).toISOString(),
+}));
+
 let modelsCache: ModelsPayload | null = null;
 let modelsCacheAt = 0;
 const MODELS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+// When a configured provider's live fetch fails, the merged payload is degraded
+// (missing that provider's models). Cache it only briefly so the list self-heals
+// within a minute instead of sticking for the full hour until a rebuild.
+const MODELS_DEGRADED_TTL = 60 * 1000; // 1 minute
 
 function toAnthropicOption(m: ModelInfo): ModelOption {
   return {
@@ -390,35 +416,71 @@ api.get("/models", async (c) => {
   if (modelsCache && now - modelsCacheAt < MODELS_CACHE_TTL) {
     return c.json(modelsCache);
   }
+
+  const anthropicConfigured = Boolean(process.env.ANTHROPIC_API_KEY);
+  const openRouterConfigured = isOpenRouterConfigured();
+  const omniRouteIds = parseAllowedOmniRouteModels();
+
+  // Fetch every configured provider in parallel so total latency is the slowest
+  // one, not the sum. Each settles independently — a failure degrades only that
+  // provider's list. Anthropic gets an explicit timeout/retry cap (the SDK
+  // default is ~10 min + retries) so a slow/blocked egress can't stall the whole
+  // endpoint the way OpenRouter (15s) and OmniRoute (5s) already can't.
+  const [anthropicRes, openRouterRes, omniRouteNamesRes] = await Promise.allSettled([
+    anthropicConfigured
+      ? getClient().models.list({}, { timeout: 15_000, maxRetries: 1 }).then((p) => p.data)
+      : Promise.resolve([] as ModelInfo[]),
+    openRouterConfigured ? refreshOpenRouterCatalog() : Promise.resolve(currentOpenRouterCatalog()),
+    omniRouteIds.length > 0 ? omniRouteDisplayNames() : Promise.resolve(new Map<string, string>()),
+  ]);
+
+  let anthropicOk = true;
   let anthropicModels: ModelInfo[] = [];
-  try {
-    const client = getClient();
-    const page = await client.models.list();
-    anthropicModels = page.data;
-  } catch {
-    // Anthropic key missing/invalid — fall through with an empty Anthropic
-    // list; other providers (if configured) still populate the picker.
+  if (anthropicRes.status === "fulfilled") {
+    anthropicModels = anthropicRes.value;
+  } else {
+    anthropicOk = false;
+    console.warn("[models] Anthropic models.list failed:", (anthropicRes.reason as Error)?.message);
+    // Keep Claude in the picker during the outage instead of leaving it empty.
+    if (anthropicConfigured) anthropicModels = ANTHROPIC_FALLBACK_MODELS;
   }
 
+  let openRouterOk = true;
   let openRouterModels: OpenRouterModel[] = [];
-  if (isOpenRouterConfigured()) {
-    try {
-      openRouterModels = await refreshOpenRouterCatalog();
-    } catch (e) {
-      console.warn("[models] OpenRouter catalog fetch failed:", (e as Error).message);
-    }
+  if (openRouterRes.status === "fulfilled") {
+    openRouterModels = openRouterRes.value;
   } else {
+    openRouterOk = false;
+    console.warn("[models] OpenRouter catalog fetch failed:", (openRouterRes.reason as Error)?.message);
     openRouterModels = currentOpenRouterCatalog();
   }
 
-  const omniRouteIds = parseAllowedOmniRouteModels();
-  const omniRouteNames = omniRouteIds.length > 0 ? await omniRouteDisplayNames() : new Map<string, string>();
+  const omniRouteNames =
+    omniRouteNamesRes.status === "fulfilled" ? omniRouteNamesRes.value : new Map<string, string>();
+
+  // "Healthy" = every configured network provider actually returned. OmniRoute is
+  // env-driven (ids always present) and its display-name fetch is best-effort, so
+  // it never marks the payload degraded.
+  const healthy = (!anthropicConfigured || anthropicOk) && (!openRouterConfigured || openRouterOk);
 
   if (anthropicModels.length === 0 && openRouterModels.length === 0 && omniRouteIds.length === 0) {
     return c.json(FALLBACK);
   }
-  modelsCache = buildModelsPayload(anthropicModels, openRouterModels, omniRouteIds, omniRouteNames);
-  modelsCacheAt = now;
+
+  const payload = buildModelsPayload(anthropicModels, openRouterModels, omniRouteIds, omniRouteNames);
+
+  if (healthy) {
+    modelsCache = payload;
+    modelsCacheAt = now;
+    return c.json(payload);
+  }
+
+  // Degraded: prefer the last known-good payload if we have one; otherwise serve
+  // the best-effort payload. Either way cache only briefly (MODELS_DEGRADED_TTL)
+  // so it self-heals within a minute instead of sticking for the full hour — while
+  // still shielding upstreams from a per-request retry storm during an outage.
+  modelsCache = modelsCache ?? payload;
+  modelsCacheAt = now - (MODELS_CACHE_TTL - MODELS_DEGRADED_TTL);
   return c.json(modelsCache);
 });
 
@@ -573,6 +635,35 @@ api.post("/ebay/comps", async (c) => {
       return c.json({ ok: false, error: "No comparable active eBay listings found." }, 404);
     }
     return c.json({ ok: true, ...comps });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 502);
+  }
+});
+
+// Required item-specifics for the listing's eBay leaf category (Taxonomy API,
+// app token — no seller connection needed). Lets the review card offer editable
+// fields for the aspects the publish path will enforce, so the seller can supply
+// real values (and the exact allowed choices for pick-lists) before posting.
+api.post("/ebay/aspects", async (c) => {
+  const denied = guardApiRequest(c.req.raw);
+  if (denied) return denied;
+  if (!isEbayConfigured()) {
+    return c.json({ ok: false, error: "eBay isn't configured (no App ID / Cert ID)." }, 400);
+  }
+  let body: { listing?: ListingResult };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: "Invalid request." }, 400);
+  }
+  if (!body.listing) return c.json({ ok: false, error: "Missing listing." }, 400);
+  try {
+    const categoryId = await resolveLeafCategoryId(body.listing);
+    const meta = await categoryAspects(categoryId);
+    // Only the REQUIRED aspects the seller may need to fill, capped so the card
+    // stays light. SELECTION_ONLY aspects carry eBay's exact allowed values.
+    const aspects = meta.filter((a) => a.required).slice(0, 12);
+    return c.json({ ok: true, categoryId, aspects });
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 502);
   }

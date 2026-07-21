@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { ItemGroup, ListingResult, MarketConfig, Photo } from "@/lib/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  CategoryAspect,
+  CategoryAspectsResponse,
+  ItemGroup,
+  ListingResult,
+  MarketConfig,
+  Photo,
+} from "@/lib/types";
 import { apiPost } from "@/lib/api-client";
 import { SIZE_REQUIRED_CATEGORIES } from "@/lib/categories";
 import { formatListingForVinted } from "@/lib/export";
@@ -128,8 +135,59 @@ export function ListingCard({
     // non-string value can't crash the card (el.trim is not a function → blank screen).
     return entries
       .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v ?? "")] as [string, string])
-      .filter(([k, v]) => v.trim() !== "" && !k.startsWith("---"));
+      // Brand and Model have dedicated editable fields above, so drop them from
+      // this read-only list to avoid showing (and diverging from) them twice.
+      .filter(([k, v]) => v.trim() !== "" && !k.startsWith("---") && k !== "Brand" && k !== "Model");
   }, [listing?.item_specifics]);
+
+  // Patch a single item-specific (e.g. Model) without dropping the rest. Model
+  // isn't a top-level ListingResult field — it lives in item_specifics, which is
+  // what buildAspects() reads when creating the eBay inventory item.
+  const editSpecific = (key: string, value: string) =>
+    onEdit(group.id, {
+      item_specifics: { ...(listing?.item_specifics ?? {}), [key]: value },
+    });
+
+  // Required item-specifics for this listing's eBay category, fetched once the
+  // card is open. Surfacing them (with eBay's exact pick-list values) lets the
+  // seller fill real values instead of hitting a 25002 "<aspect> is missing" on
+  // post — and the server still auto-fills anything left blank.
+  const [reqAspects, setReqAspects] = useState<CategoryAspect[] | null>(null);
+  const aspectsRequested = useRef(false);
+  useEffect(() => {
+    if (!open || group.status !== "done" || !ebayConfigured || !listing) return;
+    if (aspectsRequested.current) return;
+    aspectsRequested.current = true;
+    apiPost("/api/ebay/aspects", { listing })
+      .then((r) => r.json())
+      .then((data: CategoryAspectsResponse) => {
+        if (data.ok && data.aspects) setReqAspects(data.aspects);
+      })
+      .catch(() => {
+        /* non-fatal: the publish path still auto-fills missing required aspects */
+      });
+    // listing is intentionally omitted from deps: the category is stable and the
+    // ref guard already makes this fire once, so edits don't trigger a refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, group.status, ebayConfigured]);
+
+  // Brand, Model/MPN and Size already have dedicated fields above — drop them so
+  // we don't offer two editors for the same aspect.
+  const isCovered = (name: string) => {
+    const n = name.toLowerCase();
+    return (
+      n === "brand" ||
+      n === "model" ||
+      n === "mpn" ||
+      (n.includes("size") && !n.includes("size type"))
+    );
+  };
+  const requiredAspects = (reqAspects ?? []).filter((a) => !isCovered(a.name));
+
+  // Anything now shown as an editable required field is dropped from the
+  // read-only list below, so each aspect appears exactly once.
+  const requiredNames = new Set(requiredAspects.map((a) => a.name.toLowerCase()));
+  const readOnlySpecifics = specifics.filter(([k]) => !requiredNames.has(k.toLowerCase()));
 
   const titleLen = listing?.title?.length ?? 0;
 
@@ -295,12 +353,32 @@ export function ListingCard({
                 ))}
               </select>
             </div>
-            {listing.brand && (
-              <div className="stat">
-                <div className="k">Brand</div>
-                <div className="v">{listing.brand}</div>
-              </div>
-            )}
+            <div className="stat editable">
+              <label className="k" htmlFor={`brand-${group.id}`}>
+                Brand
+              </label>
+              <input
+                id={`brand-${group.id}`}
+                type="text"
+                className="brand-input"
+                value={listing.brand ?? ""}
+                placeholder="e.g. Nike, or Unbranded"
+                onChange={(e) => onEdit(group.id, { brand: e.target.value })}
+              />
+            </div>
+            <div className="stat editable">
+              <label className="k" htmlFor={`model-${group.id}`}>
+                Model
+              </label>
+              <input
+                id={`model-${group.id}`}
+                type="text"
+                className="model-input"
+                value={listing.item_specifics?.Model ?? ""}
+                placeholder="e.g. Air Max 90, or Does Not Apply"
+                onChange={(e) => editSpecific("Model", e.target.value)}
+              />
+            </div>
             {(sizeRequired || listing.size) && (
               <div className={`stat editable${sizeMissing ? " needs-attention" : ""}`}>
                 <label className="k" htmlFor={`size-${group.id}`}>
@@ -342,11 +420,67 @@ export function ListingCard({
             </div>
           </div>
 
-          {specifics.length > 0 && (
+          {requiredAspects.length > 0 && (
+            <div className="req-aspects">
+              <div className="req-aspects-head">
+                eBay category details{" "}
+                <span className="req-aspects-note">
+                  required for this category — blanks are auto-filled on post
+                </span>
+              </div>
+              <div className="meta-row">
+                {requiredAspects.map((a) => {
+                  const val = listing.item_specifics?.[a.name] ?? "";
+                  const empty = !val.trim();
+                  const id = `asp-${group.id}-${a.name}`;
+                  return (
+                    <div
+                      key={a.name}
+                      className={`stat editable${empty ? " needs-attention" : ""}`}
+                    >
+                      <label className="k" htmlFor={id}>
+                        {a.name}
+                      </label>
+                      {a.mode === "SELECTION_ONLY" && a.values.length > 0 ? (
+                        <select
+                          id={id}
+                          value={val}
+                          onChange={(e) => editSpecific(a.name, e.target.value)}
+                        >
+                          <option value="">— select —</option>
+                          {/* Keep a value the model supplied that isn't on eBay's
+                              list, rather than silently dropping it. */}
+                          {val && !a.values.includes(val) && (
+                            <option value={val}>{val}</option>
+                          )}
+                          {a.values.map((v) => (
+                            <option key={v} value={v}>
+                              {v}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          id={id}
+                          type="text"
+                          className="aspect-input"
+                          value={val}
+                          placeholder="—"
+                          onChange={(e) => editSpecific(a.name, e.target.value)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {readOnlySpecifics.length > 0 && (
             <details className="specifics-details">
-              <summary>{specifics.length} item specifics</summary>
+              <summary>{readOnlySpecifics.length} item specifics</summary>
               <div className="specifics">
-                {specifics.map(([k, v]) => (
+                {readOnlySpecifics.map(([k, v]) => (
                   <div className="row" key={k}>
                     <span className="k">{k}</span>
                     <span>{v}</span>

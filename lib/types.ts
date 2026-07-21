@@ -91,6 +91,23 @@ export interface ModelsPayload {
   analysisModels: ModelOption[];
 }
 
+// A required item-specific (aspect) for the listing's eBay leaf category, served
+// by /api/ebay/aspects so the review card can offer editable fields — with the
+// exact allowed values for SELECTION_ONLY aspects — before the seller posts.
+export interface CategoryAspect {
+  name: string;
+  required: boolean;
+  mode: "FREE_TEXT" | "SELECTION_ONLY";
+  values: string[];
+}
+
+export interface CategoryAspectsResponse {
+  ok: boolean;
+  categoryId?: string;
+  aspects?: CategoryAspect[];
+  error?: string;
+}
+
 // Marketplace presentation, served by /api/ebay/status so the UI shows prices
 // and listing links for the active eBay site (UK/GBP by default).
 export interface MarketConfig {

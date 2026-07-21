@@ -58,7 +58,17 @@ export async function appToken(): Promise<string> {
 }
 
 async function taxGet(path: string): Promise<any | null> {
-  const token = await appToken();
+  const endpoint = path.split("?")[0];
+  let token: string;
+  try {
+    token = await appToken();
+  } catch (e) {
+    // A dead app token means EVERY taxonomy call fails — and callers swallow the
+    // empty result, so required aspects (Connectivity, …) silently go unfilled
+    // and 25002 the publish. Make that visible.
+    console.warn(`[taxonomy] app token failed for ${endpoint}:`, (e as Error).message);
+    throw e;
+  }
   const resp = await fetch(
     `${EBAY_TAX_BASE}/category_tree/${EBAY_CATEGORY_TREE_ID}/${path}`,
     {
@@ -68,8 +78,17 @@ async function taxGet(path: string): Promise<any | null> {
         "Accept-Language": EBAY_LOCALE,
       },
     }
-  );
-  if (!resp.ok) return null;
+  ).catch((e) => {
+    // Network/egress failure (e.g. firewalld blocking the container) — surface it
+    // rather than letting it look like "category has no required aspects".
+    console.warn(`[taxonomy] ${endpoint} request failed:`, (e as Error).message);
+    return null;
+  });
+  if (!resp) return null;
+  if (!resp.ok) {
+    console.warn(`[taxonomy] ${endpoint} returned HTTP ${resp.status}`);
+    return null;
+  }
   return resp.json().catch(() => null);
 }
 
@@ -114,9 +133,17 @@ export async function categoryAspects(categoryId: string): Promise<AspectMeta[]>
           .filter(Boolean),
       });
     }
+    const requiredCount = out.filter((a) => a.required).length;
+    console.info(
+      `[taxonomy] category ${categoryId}: ${out.length} aspects (${requiredCount} required)`
+    );
     aspectCache.set(categoryId, out);
     return out;
-  } catch {
+  } catch (e) {
+    // Return [] so publish still proceeds on best-effort defaults, but say so —
+    // an empty result here is exactly what lets a required SELECTION_ONLY aspect
+    // (which needs one of eBay's exact values) fall through and 25002 the listing.
+    console.warn(`[taxonomy] aspects fetch failed for category ${categoryId}:`, (e as Error).message);
     return [];
   }
 }
