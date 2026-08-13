@@ -14,6 +14,15 @@ services:
     # in .env.local. On Linux this hostname only resolves with the mapping below.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Docker copies the host's /etc/resolv.conf when the container is CREATED. If
+    # that file happens to point only at a local/internal resolver, the container's
+    # embedded resolver (127.0.0.11) is left with no upstream — every hostname
+    # lookup then fails while raw-IP egress still works, so the app fails with
+    # confusing "provider unavailable" errors. Pin real resolvers so a transient
+    # host-side resolv.conf state can't silently break DNS for the container.
+    dns:
+      - 192.168.1.1
+      - 1.1.1.1
     restart: unless-stopped
 
 networks:
@@ -25,7 +34,8 @@ networks:
   # time the network is recreated — so pin the name and add it once, permanently:
   #   sudo firewall-cmd --permanent --zone=docker --change-interface=ebaylister0
   #   sudo firewall-cmd --zone=docker --change-interface=ebaylister0   # apply now
-  # See .env.example for the OMNIROUTE_BASE_URL / host.docker.internal note.
+  # See .env.example for the OMNIROUTE_BASE_URL / host.docker.internal note, and
+  # the app's `dns:` above for the other half of "the container can't reach X".
   default:
     driver_opts:
       com.docker.network.bridge.name: ebaylister0

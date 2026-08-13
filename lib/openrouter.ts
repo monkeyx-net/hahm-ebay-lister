@@ -3,6 +3,7 @@
 // directly with fetch (same convention as lib/ebay/*.ts).
 
 import type { OpenAIChatContentPart, OpenAIChatResult } from "./images";
+import { httpStatus } from "./errors";
 
 const BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -44,10 +45,7 @@ export class OpenRouterAuthError extends Error {
 }
 
 export function openRouterAuthError(e: unknown): OpenRouterAuthError | null {
-  const status =
-    e && typeof e === "object" && "status" in e
-      ? Number((e as { status?: number }).status)
-      : undefined;
+  const status = httpStatus(e);
   const message = e instanceof Error ? e.message : "";
   if (status === 401)
     return new OpenRouterAuthError(

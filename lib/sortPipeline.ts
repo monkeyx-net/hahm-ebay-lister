@@ -8,6 +8,7 @@ import {
 } from "./prompts";
 import { isValidImage, labeledParts, type GenericContentPart, type WireImage } from "./images";
 import { mapLimit } from "./concurrency";
+import { errorMessage, httpStatus } from "./errors";
 
 export const SORT_MODEL_DEFAULT: ModelRef = { provider: "anthropic", model: "claude-sonnet-4-6" };
 const BATCH_SIZE = 10;
@@ -30,9 +31,11 @@ export interface SortResult {
   orphanIndices: number[];
 }
 
-// Thrown when EVERY grouping batch failed (API errors / rate limits) — distinct
-// from a successful run where the model simply found no groups. Lets the route
-// tell the user to wait and retry instead of the misleading "try fewer photos."
+// Thrown when EVERY grouping batch failed (API errors / rate limits / no route to
+// the provider) — distinct from a successful run where the model simply found no
+// groups. Carries a message naming the actual cause, so the route doesn't tell the
+// user to "wait and retry" when the real problem is that the server can't reach
+// the provider at all.
 export class SortUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -42,37 +45,62 @@ export class SortUnavailableError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+interface ProviderJsonResult<T> {
+  data: T | null;
+  // The error from the final attempt, when data is null — lets groupPhotos tell a
+  // rate limit apart from an unreachable provider.
+  lastError?: unknown;
+}
+
 // Call the model and parse JSON, retrying transient/rate-limit errors with backoff.
 async function providerJson<T>(
   ref: ModelRef,
   content: GenericContentPart[],
   maxTokens: number,
   label: string
-): Promise<T | null> {
+): Promise<ProviderJsonResult<T>> {
+  let lastError: unknown;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const result = await callVisionModel({ ref, content, maxTokens });
-      return parseModelJson<T>(result.text);
+      return { data: parseModelJson<T>(result.text) };
     } catch (e) {
-      const status =
-        e && typeof e === "object" && "status" in e
-          ? Number((e as { status?: number }).status)
-          : undefined;
+      lastError = e;
       // Account-level failures won't fix themselves on retry — surface them.
       const fatal = providerAuthError(e, ref.provider);
       if (fatal) throw fatal;
+      // No usable status means a connection or JSON-parse failure, both of which
+      // are worth retrying. (Reading it via httpStatus matters: the Anthropic SDK's
+      // connection error carries status: undefined, which a bare Number() turns
+      // into NaN — that used to make every connection blip look non-retryable.)
+      const status = httpStatus(e);
       const retryable = status === undefined || RETRYABLE_STATUS.has(status);
+      const why = `${status ?? "parse/conn"}: ${errorMessage(e)}`;
       if (attempt < 3 && retryable) {
         const wait = Math.min(10000, 800 * 2 ** attempt) + Math.floor(Math.random() * 400);
-        console.warn(`[sort] ${label}: ${status ?? "parse/conn"} error — retry ${attempt + 1} in ${wait}ms`);
+        console.warn(`[sort] ${label}: ${why} — retry ${attempt + 1} in ${wait}ms`);
         await sleep(wait);
         continue;
       }
-      console.warn(`[sort] ${label}: giving up (${status ?? (e as Error).message})`);
-      return null;
+      console.warn(`[sort] ${label}: giving up (${why})`);
+      return { data: null, lastError: e };
     }
   }
-  return null;
+  return { data: null, lastError };
+}
+
+// Turn the errors from a fully-failed grouping run into a message that names the
+// real cause, so the operator isn't sent to look for a rate limit that isn't there.
+function unavailableMessage(errors: unknown[]): string {
+  const statuses = errors.map(httpStatus);
+  if (statuses.every((s) => s === undefined)) {
+    return "Couldn't reach the AI provider — the server has no network or DNS access to it. Check the server's connectivity, then try again; reducing the number of photos won't help.";
+  }
+  if (statuses.some((s) => s === 429 || s === 529)) {
+    return "The photo-sorting service was rate-limited — every request failed. Wait a minute and try again; reducing the number of photos won't help.";
+  }
+  const seen = Array.from(new Set(statuses.filter((s): s is number => s !== undefined)));
+  return `The AI provider rejected every request (HTTP ${seen.join(", ")}). Check the server logs; reducing the number of photos won't help.`;
 }
 
 // Step 1 — group photos in independent batches of 10 (run a few at a time).
@@ -99,7 +127,7 @@ async function groupPhotos(
       type: "text",
       text: buildSortPrompt(b.batch.length, b.labelStart, b.labelEnd, note),
     });
-    const data = await providerJson<{
+    const { data, lastError } = await providerJson<{
       groups?: { folder_name?: string; photo_indices?: number[] }[];
     }>(ref, content, 2000, `group ${b.labelStart}-${b.labelEnd}`);
 
@@ -113,15 +141,13 @@ async function groupPhotos(
       if (indices.length) out.push({ name: slugifyFolderName(g.folder_name ?? "item"), indices });
     }
     // data === null means the call failed after exhausting retries (vs. a
-    // successful call that simply returned no groups) — track it so we can tell a
-    // total outage apart from "the model found nothing to group."
-    return { out, failed: data === null };
+    // successful call that simply returned no groups) — track it, with why, so we
+    // can tell a total outage apart from "the model found nothing to group."
+    return { out, failed: data === null, lastError };
   });
 
   if (perBatch.length > 0 && perBatch.every((b) => b.failed)) {
-    throw new SortUnavailableError(
-      "The photo-sorting service was unavailable or rate-limited — every request failed. Wait a minute and try again; reducing the number of photos won't help."
-    );
+    throw new SortUnavailableError(unavailableMessage(perBatch.map((b) => b.lastError)));
   }
 
   return perBatch.flatMap((b) => b.out);
@@ -139,7 +165,7 @@ async function verifyGroups(
     if (group.indices.length === 1) return group;
     const content = labeledParts(group.indices.map((i) => images[i]), 1);
     content.push({ type: "text", text: buildVerifyGroupPrompt(group.indices.length) });
-    const result = await providerJson<{ valid?: boolean; keep_indices?: number[] }>(
+    const { data: result } = await providerJson<{ valid?: boolean; keep_indices?: number[] }>(
       ref,
       content,
       300,
@@ -183,7 +209,7 @@ async function mergeSplitGroups(
       { type: "image", image: bImage },
       { type: "text", text: buildVerifyMergePrompt(group.indices.length, next.indices.length) },
     ];
-    const result = await providerJson<{ merge?: boolean }>(ref, content, 100, `merge ${i}`);
+    const { data: result } = await providerJson<{ merge?: boolean }>(ref, content, 100, `merge ${i}`);
     return result?.merge === true;
   });
 

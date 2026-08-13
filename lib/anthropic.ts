@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { errorMessage, httpStatus } from "./errors";
 
 let client: Anthropic | null = null;
 
@@ -45,14 +46,8 @@ export class AnthropicAuthError extends Error {
 }
 
 export function anthropicAuthError(e: unknown): AnthropicAuthError | null {
-  const status =
-    e && typeof e === "object" && "status" in e
-      ? Number((e as { status?: number }).status)
-      : undefined;
-  const message =
-    e && typeof e === "object" && "message" in e
-      ? String((e as { message?: unknown }).message ?? "")
-      : "";
+  const status = httpStatus(e);
+  const message = errorMessage(e);
   if (status === 401)
     return new AnthropicAuthError(
       "Anthropic rejected your API key (401). Check that ANTHROPIC_API_KEY is set correctly in your environment variables.",

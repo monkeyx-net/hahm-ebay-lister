@@ -815,7 +815,7 @@ async function fetchOrCreateLocation(accessToken: string): Promise<string> {
 export async function findOfferBySku(
   accessToken: string,
   sku: string
-): Promise<{ offerId: string; listingId: string; status: string } | null> {
+): Promise<{ offerId: string; listingId: string; status: string; categoryId: string } | null> {
   const r = await ebayRequest(
     accessToken,
     "GET",
@@ -831,6 +831,9 @@ export async function findOfferBySku(
     offerId: String(o.offerId || ""),
     listingId: String(o?.listing?.listingId || ""),
     status: String(o?.status || "").toUpperCase(),
+    // The category this SKU is already listed under. publishListing compares it
+    // against the category it's about to use, to catch a reused SKU.
+    categoryId: String(o?.categoryId || ""),
   };
 }
 
@@ -871,6 +874,34 @@ export async function publishListing(
       sku,
       error:
         "Your eBay account is missing a business policy (payment, shipping, or returns). Set these up in eBay → Account → Business policies, then try again.",
+    };
+  }
+
+  // A SKU is global to the seller's eBay inventory, and with no bin prefix the
+  // first item of every session is the bare letter "A" (see buildSku) — so it
+  // readily collides with something listed in an earlier session. That matters
+  // because PUT /inventory_item/{sku} carries no category of its own: eBay
+  // validates it against whatever offer already exists for the SKU. Reusing "A"
+  // from, say, a pair of headphones makes a coat fail with "The item specific
+  // Connectivity is missing" — an aspect this category doesn't even have, which
+  // no amount of aspect recovery can satisfy. Catch it here and say so plainly.
+  //
+  // Only a DIFFERENT category is a collision: a same-category offer is a re-run
+  // of this same item (a retry after a partial publish), which must still work —
+  // the offer stage below updates it in place.
+  const priorOffer = await findOfferBySku(accessToken, sku);
+  if (priorOffer && priorOffer.categoryId && priorOffer.categoryId !== catId) {
+    const where = priorOffer.listingId ? ` (listing ${priorOffer.listingId})` : "";
+    console.warn(
+      `[ebay/publish] sku=${sku} already listed in category ${priorOffer.categoryId}, ` +
+        `this item resolves to ${catId} — refusing to overwrite`
+    );
+    return {
+      success: false,
+      sku,
+      error:
+        `SKU "${sku}" is already used by a different eBay listing${where}, in another category. ` +
+        `Publishing would overwrite it. Set a bin prefix (or edit this item's SKU) so each item gets its own, then try again.`,
     };
   }
 
@@ -927,22 +958,23 @@ export async function publishListing(
       sku
     );
 
-  let r = await putInventory();
-  if (![200, 201, 204].includes(r.status)) {
-    r = await recoverMissingAspects(r, {
+  const inventoryOk = (x: EbayResp) => [200, 201, 204].includes(x.status);
+  const recoverAspects = (resp: EbayResp) =>
+    recoverMissingAspects(resp, {
       aspects,
       listing,
       meta: aspectMeta,
       inventoryItem,
       reattempt: putInventory,
-      ok: (x) => [200, 201, 204].includes(x.status),
+      ok: inventoryOk,
     });
+
+  let r = await putInventory();
+  if (!inventoryOk(r)) {
+    r = await recoverAspects(r);
     // Recovery: condition invalid for this category (25021/25059) → step down
     // to a grade the category accepts.
-    if (
-      ![200, 201, 204].includes(r.status) &&
-      (errorIds(r).includes(25021) || errorIds(r).includes(25059))
-    ) {
+    if (!inventoryOk(r) && (errorIds(r).includes(25021) || errorIds(r).includes(25059))) {
       for (const alt of condCandidates) {
         if (alt === inventoryItem.condition) continue;
         // Loud on purpose: a silent step-down is how "Excellent" items ended
@@ -952,11 +984,15 @@ export async function publishListing(
         );
         inventoryItem.condition = alt;
         r = await putInventory();
-        if ([200, 201, 204].includes(r.status)) break;
+        if (inventoryOk(r)) break;
         if (!errorIds(r).includes(25021) && !errorIds(r).includes(25059)) break;
       }
+      // eBay reports one problem at a time, so the accepted-condition retry above
+      // is often the first response to mention a missing aspect — which the pass
+      // before the loop never got to see. Run it again on the newer error.
+      if (!inventoryOk(r) && extractMissingAspects(r).length) r = await recoverAspects(r);
     }
-    if (![200, 201, 204].includes(r.status)) {
+    if (!inventoryOk(r)) {
       logPublishFailure("inventory item", sku, r);
       return { success: false, sku, error: publishErrorMessage("Inventory item failed", r) };
     }

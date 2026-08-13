@@ -6,6 +6,7 @@
 // (REQUIRE_API_KEY defaults to false upstream).
 
 import type { OpenAIChatContentPart, OpenAIChatResult } from "./images";
+import { httpStatus } from "./errors";
 
 const DEFAULT_BASE_URL = "http://localhost:20128/v1";
 
@@ -36,11 +37,7 @@ export class OmniRouteAuthError extends Error {
 }
 
 export function omniRouteAuthError(e: unknown): OmniRouteAuthError | null {
-  const status =
-    e && typeof e === "object" && "status" in e
-      ? Number((e as { status?: number }).status)
-      : undefined;
-  if (status === 401)
+  if (httpStatus(e) === 401)
     return new OmniRouteAuthError(
       "OmniRoute rejected the request (401). If REQUIRE_API_KEY is enabled on your OmniRoute instance, set OMNIROUTE_API_KEY to a valid key from its Dashboard → Endpoints panel.",
       401
