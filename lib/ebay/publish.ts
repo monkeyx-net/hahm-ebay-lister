@@ -7,8 +7,7 @@ import {
   EBAY_ACC_BASE,
   EBAY_INV_BASE,
   EBAY_MARKETPLACE_ID,
-  EBAY_TRADING,
-  EBAY_SITE_ID,
+  EBAY_MEDIA_BASE,
   EBAY_CURRENCY,
   EBAY_LOCALE,
   EBAY_LOCATION_COUNTRY,
@@ -679,7 +678,10 @@ function updateOfferBody(offer: Record<string, unknown>): Record<string, unknown
   return Object.fromEntries(Object.entries(offer).filter(([k]) => !skip.has(k)));
 }
 
-// ── Photo upload to eBay Picture Services (Trading API, XML) ──────────────────
+// ── Photo upload to eBay Picture Services (Sell Media API, REST) ──────────────
+// createImageFromFile hands back only an image_id (via the Location header) —
+// a follow-up getImage call resolves it to the actual EPS-hosted imageUrl that
+// the Inventory API's product.imageUrls expects.
 
 async function uploadPhoto(
   accessToken: string,
@@ -687,31 +689,30 @@ async function uploadPhoto(
   mediaType: string,
   name: string
 ): Promise<string | null> {
-  const xml = `<?xml version="1.0" encoding="utf-8"?>
-<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <PictureName>${name.slice(0, 50)}</PictureName>
-  <PictureUploadPolicy>ClearAndNew</PictureUploadPolicy>
-</UploadSiteHostedPicturesRequest>`;
-
   const data = base64.includes(",") ? base64.split(",")[1] : base64;
   const bytes = Buffer.from(data, "base64");
   const form = new FormData();
-  form.append("XML Payload", new Blob([xml], { type: "text/xml;charset=utf-8" }), "payload.xml");
   form.append("image", new Blob([new Uint8Array(bytes)], { type: mediaType }), name);
 
-  const resp = await fetch(EBAY_TRADING, {
+  const created = await fetch(`${EBAY_MEDIA_BASE}/image/create_image_from_file`, {
     method: "POST",
-    headers: {
-      "X-EBAY-API-SITEID": EBAY_SITE_ID,
-      "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-      "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
-      "X-EBAY-API-IAF-TOKEN": accessToken,
-    },
+    headers: { Authorization: `Bearer ${accessToken}` },
     body: form,
   });
-  const text = await resp.text();
-  const m = text.match(/<FullURL>([^<]+)<\/FullURL>/);
-  return m ? m[1] : null;
+  if (!created.ok) return null;
+
+  // The Location header carries the new image's URI — the last path segment
+  // is the image_id getImage expects.
+  const location = created.headers.get("Location") || created.headers.get("location");
+  const imageId = location?.split("/").filter(Boolean).pop();
+  if (!imageId) return null;
+
+  const got = await fetch(`${EBAY_MEDIA_BASE}/image/${imageId}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  if (!got.ok) return null;
+  const json: any = await got.json().catch(() => null);
+  return json?.imageUrl || null;
 }
 
 // ── Policies & location ──────────────────────────────────────────────────────
