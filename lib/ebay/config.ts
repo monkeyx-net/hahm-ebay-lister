@@ -16,6 +16,9 @@ export const EBAY_ACC_BASE = "https://api.ebay.com/sell/account/v1";
 export const EBAY_META_BASE = "https://api.ebay.com/sell/metadata/v1";
 export const EBAY_TAX_BASE = "https://api.ebay.com/commerce/taxonomy/v1";
 export const EBAY_TRADING = "https://api.ebay.com/ws/api.dll";
+// Sell Media API (REST) — replaces the Trading API's UploadSiteHostedPictures
+// for listing photo uploads. Same EPS-hosted images, same sell.inventory scope.
+export const EBAY_MEDIA_BASE = "https://api.ebay.com/commerce/media/v1_beta";
 
 // ── Marketplace selection ─────────────────────────────────────────────────────
 // Defaults target eBay UK (GBP). Override via env to run against another eBay
