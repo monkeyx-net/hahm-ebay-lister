@@ -18,7 +18,11 @@ export const EBAY_TAX_BASE = "https://api.ebay.com/commerce/taxonomy/v1";
 export const EBAY_TRADING = "https://api.ebay.com/ws/api.dll";
 // Sell Media API (REST) — replaces the Trading API's UploadSiteHostedPictures
 // for listing photo uploads. Same EPS-hosted images, same sell.inventory scope.
-export const EBAY_MEDIA_BASE = "https://api.ebay.com/commerce/media/v1_beta";
+// NOTE: the Media API is served from its own gateway host, apim.ebay.com — NOT
+// api.ebay.com like every other base URL above. Pointing it at api.ebay.com is
+// what broke every photo upload after the switchover (issue: "Could not upload
+// any photos to eBay"). Sandbox equivalent is apim.sandbox.ebay.com.
+export const EBAY_MEDIA_BASE = "https://apim.ebay.com/commerce/media/v1_beta";
 
 // ── Marketplace selection ─────────────────────────────────────────────────────
 // Defaults target eBay UK (GBP). Override via env to run against another eBay
@@ -29,7 +33,7 @@ export const EBAY_MEDIA_BASE = "https://api.ebay.com/commerce/media/v1_beta";
 //   DE: EBAY_DE / tree 77 / Trading site 77 / EUR / de-DE
 export const EBAY_MARKETPLACE_ID = process.env.EBAY_MARKETPLACE_ID || "EBAY_GB";
 export const EBAY_CATEGORY_TREE_ID = process.env.EBAY_CATEGORY_TREE_ID || "3";
-// Trading API site id (used for the XML photo-upload call). UK = 3, US = 0.
+// Trading API site id, sent on every legacy XML call. UK = 3, US = 0.
 export const EBAY_SITE_ID = process.env.EBAY_SITE_ID || "3";
 // ISO 4217 currency code the offers are priced in.
 export const EBAY_CURRENCY = process.env.EBAY_CURRENCY || "GBP";

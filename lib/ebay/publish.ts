@@ -185,12 +185,19 @@ export async function ebayRequest(
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
+  return readEbayResp(resp);
+}
+
+// Shared response reader, so calls that can't go through ebayRequest (the
+// multipart photo upload) still land in the same EbayResp shape and get the
+// same error extraction and logging.
+export async function readEbayResp(resp: Response): Promise<EbayResp> {
   const text = await resp.text();
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
-    /* non-JSON (e.g. empty 204) */
+    /* non-JSON (e.g. empty 204, or an HTML error page from a gateway) */
   }
   return { ok: resp.ok, status: resp.status, json, text };
 }
@@ -683,36 +690,89 @@ function updateOfferBody(offer: Record<string, unknown>): Record<string, unknown
 // a follow-up getImage call resolves it to the actual EPS-hosted imageUrl that
 // the Inventory API's product.imageUrls expects.
 
+// A failed upload carries eBay's own reason back to the caller. This path used
+// to return a bare null and log nothing, so a wrong Media API host showed up as
+// an unexplained "Could not upload any photos to eBay" with empty server logs.
+interface PhotoUpload {
+  url: string | null;
+  error?: string;
+}
+
+// Log one structured line (same shape as logPublishFailure) and hand back the
+// user-facing sentence. primaryEbayError falls back to the raw body, which is
+// what surfaces a gateway's HTML error page when the request never reached eBay.
+function photoFailure(step: string, sku: string, r: EbayResp): PhotoUpload {
+  const { errorId, message } = primaryEbayError(r);
+  const detail = message || `HTTP ${r.status}`;
+  console.error(
+    `[ebay/publish] photo ${step} failed sku=${sku} http=${r.status} errorId=${errorId || "?"} ${detail}`
+  );
+  return {
+    url: null,
+    error: errorId ? `${step} (eBay error ${errorId}): ${detail}` : `${step} (${r.status}): ${detail}`,
+  };
+}
+
+function lastPathSegment(uri: unknown): string {
+  if (typeof uri !== "string") return "";
+  return uri.split("?")[0].split("/").filter(Boolean).pop() || "";
+}
+
 async function uploadPhoto(
   accessToken: string,
+  sku: string,
   base64: string,
   mediaType: string,
   name: string
-): Promise<string | null> {
+): Promise<PhotoUpload> {
   const data = base64.includes(",") ? base64.split(",")[1] : base64;
   const bytes = Buffer.from(data, "base64");
   const form = new FormData();
+  // eBay expects the file under the field name "image". Don't set Content-Type
+  // by hand — fetch derives "multipart/form-data; boundary=…" from the FormData
+  // body, and an explicit header would drop the boundary.
   form.append("image", new Blob([new Uint8Array(bytes)], { type: mediaType }), name);
 
-  const created = await fetch(`${EBAY_MEDIA_BASE}/image/create_image_from_file`, {
+  const resp = await fetch(`${EBAY_MEDIA_BASE}/image/create_image_from_file`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}` },
     body: form,
   });
-  if (!created.ok) return null;
+  const created = await readEbayResp(resp);
+  if (!created.ok) return photoFailure("upload", sku, created);
 
-  // The Location header carries the new image's URI — the last path segment
-  // is the image_id getImage expects.
-  const location = created.headers.get("Location") || created.headers.get("location");
-  const imageId = location?.split("/").filter(Boolean).pop();
-  if (!imageId) return null;
+  // The Location header carries the new image's URI — the last path segment is
+  // the image_id getImage expects. Fall back to the body in case a proxy strips
+  // the header, so "no id" is never confused with "call failed".
+  const location = resp.headers.get("location");
+  const imageId =
+    lastPathSegment(location) ||
+    (created.json?.imageId ? String(created.json.imageId) : "") ||
+    lastPathSegment(created.json?.imageUri);
+  if (!imageId) {
+    console.error(
+      `[ebay/publish] photo upload sku=${sku} http=${created.status} returned no image id ` +
+        `(no Location header, body=${created.text.slice(0, 200) || "empty"})`
+    );
+    return { url: null, error: "eBay accepted the photo but returned no image id." };
+  }
 
-  const got = await fetch(`${EBAY_MEDIA_BASE}/image/${imageId}`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-  });
-  if (!got.ok) return null;
-  const json: any = await got.json().catch(() => null);
-  return json?.imageUrl || null;
+  const got = await withTransientRetry(
+    () => ebayRequest(accessToken, "GET", `${EBAY_MEDIA_BASE}/image/${imageId}`),
+    "photo getImage",
+    sku
+  );
+  if (!got.ok) return photoFailure("getImage", sku, got);
+
+  const url = got.json?.imageUrl;
+  if (!url) {
+    console.error(
+      `[ebay/publish] photo getImage sku=${sku} image=${imageId} returned no imageUrl: ` +
+        `${got.text.slice(0, 200) || "empty body"}`
+    );
+    return { url: null, error: "eBay returned no URL for the uploaded photo." };
+  }
+  return { url: String(url) };
 }
 
 // ── Policies & location ──────────────────────────────────────────────────────
@@ -908,12 +968,24 @@ export async function publishListing(
 
   // 1. Upload photos → EPS URLs. Run a few in parallel (order-preserving, so the
   // first photo stays the gallery thumbnail). eBay caps a listing at 12 images.
-  const uploaded = await mapLimit(input.images.slice(0, 12), 4, (img) =>
-    uploadPhoto(accessToken, img.data, img.mediaType, `${sku}.jpg`)
+  const wanted = input.images.slice(0, 12);
+  const uploaded = await mapLimit(wanted, 4, (img) =>
+    uploadPhoto(accessToken, sku, img.data, img.mediaType, `${sku}.jpg`)
   );
-  const photoUrls = uploaded.filter((u): u is string => Boolean(u));
+  const photoUrls = uploaded.map((u) => u.url).filter((u): u is string => Boolean(u));
   if (photoUrls.length === 0) {
-    return { success: false, sku, error: "Could not upload any photos to eBay." };
+    const why = uploaded.find((u) => u.error)?.error;
+    return {
+      success: false,
+      sku,
+      error: `Could not upload any photos to eBay.${why ? ` ${why}` : ""}`,
+    };
+  }
+  if (photoUrls.length < wanted.length) {
+    console.warn(
+      `[ebay/publish] sku=${sku} only ${photoUrls.length}/${wanted.length} photos uploaded — ` +
+        `continuing with the ones that worked`
+    );
   }
 
   // 2. Inventory item.

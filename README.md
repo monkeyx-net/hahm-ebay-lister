@@ -240,7 +240,7 @@ It works for **both** kinds of listing:
 | `APP_URL` | for posting | Your deployed URL, e.g. `https://your-app.example.com` |
 | `EBAY_MARKETPLACE_ID` | optional | eBay site to list on. Defaults to `EBAY_GB` (UK). Use `EBAY_US`, `EBAY_DE`, etc. for other sites. |
 | `EBAY_CATEGORY_TREE_ID` | optional | Category tree for the site. Defaults to `3` (UK). US = `0`, DE = `77`. Keep consistent with the marketplace. |
-| `EBAY_SITE_ID` | optional | Trading-API site id used for photo upload. Defaults to `3` (UK). US = `0`. |
+| `EBAY_SITE_ID` | optional | Trading-API site id sent on legacy XML calls. Defaults to `3` (UK). US = `0`. |
 | `EBAY_CURRENCY` | optional | ISO currency the offers are priced in. Defaults to `GBP`. e.g. `USD`, `EUR`. |
 | `EBAY_LOCALE` | optional | Locale sent as Accept/Content-Language. Defaults to `en-GB`. e.g. `en-US`, `de-DE`. |
 | `EBAY_ITEM_BASE_URL` | optional | Base URL for "View listing" links. Defaults to `https://www.ebay.co.uk/itm/`. |
